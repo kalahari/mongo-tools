@@ -119,6 +119,7 @@ func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
 	// first create the collection with options from the metadata file
 	if intent.MetadataPath != "" {
 		log.Logf(log.Always, "reading metadata file from %v", intent.MetadataPath)
+		// XXX Move this in to the intent creation
 		jsonBytes, err := ioutil.ReadFile(intent.MetadataPath)
 		if err != nil {
 			return fmt.Errorf("error reading metadata file %v: %v", intent.MetadataPath, err)
@@ -152,26 +153,7 @@ func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
 		var rawBSONSource io.ReadCloser
 		var size int64
 
-		if restore.useStdin {
-			// closing stdin results in inconsistent behavior between
-			// environments, so we just avoid closing it
-			rawBSONSource = ioutil.NopCloser(os.Stdin)
-			log.Log(log.Always, "restoring from stdin")
-		} else {
-			fileInfo, err := os.Lstat(intent.BSONPath)
-			if err != nil {
-				return fmt.Errorf("error reading BSON file %v: %v", intent.BSONPath, err)
-			}
-			size = fileInfo.Size()
-			log.Logf(log.Info, "\tfile %v is %v bytes", intent.BSONPath, size)
-
-			rawBSONSource, err = os.Open(intent.BSONPath)
-			if err != nil {
-				return fmt.Errorf("error reading BSON file %v: %v", intent.BSONPath, err)
-			}
-		}
-
-		bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(rawBSONSource))
+		bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(intent.BSON))
 		defer bsonSource.Close()
 
 		err = restore.RestoreCollectionToDB(intent.DB, intent.C, bsonSource, size)

@@ -88,6 +88,7 @@ func (restore *MongoRestore) MetadataFromJSON(jsonBytes []byte) (bson.D, []Index
 func (restore *MongoRestore) IndexesFromBSON(intent *intents.Intent, bsonFile string) ([]IndexDocument, error) {
 	log.Logf(log.DebugLow, "scanning %v for indexes on %v collections", bsonFile, intent.C)
 
+	// XXX fixme
 	rawFile, err := os.Open(bsonFile)
 	if err != nil {
 		return nil, fmt.Errorf("error reading index bson file %v: %v", bsonFile, err)
@@ -286,11 +287,7 @@ func (restore *MongoRestore) RestoreUsersOrRoles(collectionType string, intent *
 		return fmt.Errorf("cannot use %v as a collection type in RestoreUsersOrRoles", collectionType)
 	}
 
-	rawFile, err := os.Open(intent.BSONPath)
-	if err != nil {
-		return fmt.Errorf("error reading index bson file %v: %v", intent.BSONPath, err)
-	}
-	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(rawFile))
+	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(intent.BSON))
 	defer bsonSource.Close()
 
 	tempColExists, err := restore.CollectionExists(&intents.Intent{DB: "admin", C: tempCol})
@@ -396,11 +393,7 @@ func (restore *MongoRestore) GetDumpAuthVersion() (int, error) {
 		log.Log(log.Always, "assuming users in the dump directory are from <= 2.4 (auth version 1)")
 		return 1, nil
 	}
-	rawFile, err := os.Open(intent.BSONPath)
-	if err != nil {
-		return 0, fmt.Errorf("error reading version bson file %v: %v", intent.BSONPath, err)
-	}
-	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(rawFile))
+	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(intent.BSON))
 	defer bsonSource.Close()
 
 	versionDoc := struct {

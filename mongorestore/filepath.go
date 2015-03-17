@@ -125,6 +125,12 @@ func (restore *MongoRestore) CreateIntentsForDB(db, dir string) error {
 					Size:     entry.Size(),
 					BSONPath: filepath.Join(dir, entry.Name()),
 				}
+
+				intent.BSON, err = os.Open(intent.BSONPath)
+				if err != nil {
+					return fmt.Errorf("error reading BSON file %v: %v", intent.BSONPath, err)
+				}
+
 				log.Logf(log.Info, "found collection %v bson to restore", intent.Namespace())
 				restore.manager.Put(intent)
 			case MetadataFileType:
@@ -134,6 +140,12 @@ func (restore *MongoRestore) CreateIntentsForDB(db, dir string) error {
 					C:            collection,
 					MetadataPath: filepath.Join(dir, entry.Name()),
 				}
+
+				intent.Metadata, err = os.Open(intent.MetadataPath)
+				if err != nil {
+					return err
+				}
+
 				log.Logf(log.Info, "found collection %v metadata to restore", intent.Namespace())
 				restore.manager.Put(intent)
 			default:
