@@ -366,15 +366,8 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 		return nil
 	}
 
-	metadataFilepath := filepath.Join(dbFolder, fmt.Sprintf("%v.metadata.json", intent.C))
-	metaOut, err := os.Create(metadataFilepath)
-	if err != nil {
-		return fmt.Errorf("error creating metadata.json file `%v`: %v", outFilepath, err)
-	}
-	defer metaOut.Close()
-
-	log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), metadataFilepath)
-	if err = dump.dumpMetadataToWriter(intent.DB, intent.C, metaOut); err != nil {
+	log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), intent.MetadataFilepath)
+	if err = dump.dumpMetadataToWriter(intent.DB, intent.C, intent.Metadata); err != nil {
 		return err
 	}
 

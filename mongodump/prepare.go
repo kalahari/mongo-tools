@@ -45,6 +45,16 @@ func (dump *MongoDump) CreateIntentForCollection(dbName, colName string) error {
 		MetadataPath: dump.outputPath(dbName, colName) + ".metadata.json",
 	}
 
+	intent.Metadata, err = os.Create(intent.MetadataPath)
+	if err != nil {
+		return err
+	}
+	intent.BSON, err = os.Create(intent.BSONPath)
+	if err != nil {
+		return err
+	}
+
+	// XXX FIX ME
 	// add stdout flags if we're using stdout
 	if dump.useStdout {
 		intent.BSONPath = "-"
