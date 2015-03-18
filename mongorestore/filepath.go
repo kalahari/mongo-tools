@@ -66,11 +66,16 @@ func (restore *MongoRestore) CreateAllIntents(dumpDir string) error {
 					log.Log(log.DebugLow, "found oplog.bson file to replay")
 				}
 				foundOplog = true
-				restore.manager.Put(&intents.Intent{
+				oplogIntent := &intents.Intent{
 					C:        "oplog",
 					BSONPath: filepath.Join(dumpDir, entry.Name()),
 					Size:     entry.Size(),
-				})
+				}
+				oplogIntent.BSONFile, err = os.Open(oplogIntent.BSONPath)
+				if err != nil {
+					return fmt.Errorf("unable to open oplog file %v: %v", oplogIntent.BSONPath, err)
+				}
+				restore.manager.Put(oplogIntent)
 			} else {
 				log.Logf(log.Always, `don't know what to do with file "%v", skipping...`,
 					filepath.Join(dumpDir, entry.Name()))
@@ -126,7 +131,11 @@ func (restore *MongoRestore) CreateIntentsForDB(db, dir string) error {
 					BSONPath: filepath.Join(dir, entry.Name()),
 				}
 
-				intent.BSON, err = os.Open(intent.BSONPath)
+				if intent.IsUsers() || intent.IsRoles() || intent.IsAuthVersion() || intent.IsSystemIndexes() {
+					intent.BSON, err = ioutil.ReadFile(intent.BSONPath)
+				} else { // oplog or regular collection data
+					intent.BSONFile, err = os.Open(intent.BSONPath)
+				}
 				if err != nil {
 					return fmt.Errorf("error reading BSON file %v: %v", intent.BSONPath, err)
 				}
@@ -141,7 +150,7 @@ func (restore *MongoRestore) CreateIntentsForDB(db, dir string) error {
 					MetadataPath: filepath.Join(dir, entry.Name()),
 				}
 
-				intent.Metadata, err = os.Open(intent.MetadataPath)
+				intent.Metadata, err = ioutil.ReadFile(intent.MetadataPath)
 				if err != nil {
 					return err
 				}

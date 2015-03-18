@@ -6,14 +6,14 @@ import (
 	"io"
 )
 
-// BSONSource reads documents from the underlying io.ReadCloser, Stream which
+// BSONSource reads documents from the underlying io.Reader, Stream which
 // wraps a stream of BSON documents.
 type BSONSource struct {
-	Stream io.ReadCloser
+	Stream io.Reader
 	err    error
 }
 
-// DecodedBSONSource reads documents from the underlying io.ReadCloser, Stream which
+// DecodedBSONSource reads documents from the underlying io.Reader, Stream which
 // wraps a stream of BSON documents.
 type DecodedBSONSource struct {
 	reusableBuf []byte
@@ -24,18 +24,11 @@ type DecodedBSONSource struct {
 // RawDocSource wraps basic functions for reading a BSON source file.
 type RawDocSource interface {
 	LoadNextInto(into []byte) (bool, int32)
-	Close() error
 	Err() error
 }
 
-func NewBSONSource(in io.ReadCloser) *BSONSource {
+func NewBSONSource(in io.Reader) *BSONSource {
 	return &BSONSource{in, nil}
-}
-
-// Close closes the BSONSource, rendering it unusable for I/O.
-// It returns an error, if any.
-func (bs *BSONSource) Close() error {
-	return bs.Stream.Close()
 }
 
 func NewDecodedBSONSource(ds RawDocSource) *DecodedBSONSource {

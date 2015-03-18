@@ -1,6 +1,7 @@
 package mongorestore
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/mongodb/mongo-tools/common/bsonutil"
 	"github.com/mongodb/mongo-tools/common/db"
@@ -10,7 +11,6 @@ import (
 	"github.com/mongodb/mongo-tools/common/util"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	"os"
 	"strings"
 )
 
@@ -85,17 +85,10 @@ func (restore *MongoRestore) MetadataFromJSON(jsonBytes []byte) (bson.D, []Index
 }
 
 // IndexesFromBSON extracts index information from BSON files.
-func (restore *MongoRestore) IndexesFromBSON(intent *intents.Intent, bsonFile string) ([]IndexDocument, error) {
-	log.Logf(log.DebugLow, "scanning %v for indexes on %v collections", bsonFile, intent.C)
+func (restore *MongoRestore) IndexesFromBSON(intent *intents.Intent, indexesIntent *intents.Intent) ([]IndexDocument, error) {
+	log.Logf(log.DebugLow, "scanning %v for indexes on %v collections", indexesIntent.BSONPath, intent.C)
 
-	// XXX fixme
-	rawFile, err := os.Open(bsonFile)
-	if err != nil {
-		return nil, fmt.Errorf("error reading index bson file %v: %v", bsonFile, err)
-	}
-
-	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(rawFile))
-	defer bsonSource.Close()
+	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(bytes.NewReader(indexesIntent.BSON)))
 
 	// iterate over stored indexes, saving all that match the collection
 	indexDocument := &IndexDocument{}
@@ -107,7 +100,7 @@ func (restore *MongoRestore) IndexesFromBSON(intent *intents.Intent, bsonFile st
 			collectionIndexes = append(collectionIndexes, *indexDocument)
 		}
 	}
-	if bsonSource.Err() != nil {
+	if err := bsonSource.Err(); err != nil {
 		return nil, fmt.Errorf("error scanning system.indexes for %v indexes: %v", intent.C, err)
 	}
 
@@ -287,8 +280,7 @@ func (restore *MongoRestore) RestoreUsersOrRoles(collectionType string, intent *
 		return fmt.Errorf("cannot use %v as a collection type in RestoreUsersOrRoles", collectionType)
 	}
 
-	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(intent.BSON))
-	defer bsonSource.Close()
+	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(bytes.NewReader(intent.BSON)))
 
 	tempColExists, err := restore.CollectionExists(&intents.Intent{DB: "admin", C: tempCol})
 	if err != nil {
@@ -393,14 +385,13 @@ func (restore *MongoRestore) GetDumpAuthVersion() (int, error) {
 		log.Log(log.Always, "assuming users in the dump directory are from <= 2.4 (auth version 1)")
 		return 1, nil
 	}
-	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(intent.BSON))
-	defer bsonSource.Close()
+	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(bytes.NewReader(intent.BSON)))
 
 	versionDoc := struct {
 		CurrentVersion int `bson:"currentVersion"`
 	}{}
 	bsonSource.Next(&versionDoc)
-	if err = bsonSource.Err(); err != nil {
+	if err := bsonSource.Err(); err != nil {
 		return 0, fmt.Errorf("error reading version bson file %v: %v", intent.BSONPath, err)
 	}
 	authVersion := versionDoc.CurrentVersion

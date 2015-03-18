@@ -16,10 +16,11 @@ type Intent struct {
 
 	// File locations as absolute paths
 	BSONPath     string
+	BSONFile     io.ReadWriteCloser // only for collection bson or oplogs
+	BSON         []byte             // everything else
+	BSONSize     int64
 	MetadataPath string
-	BSONFile     io.ReadWriteCloser
-	BSON         io.ReadWriteCloser
-	Metadata     io.ReadWriteCloser
+	Metadata     []byte
 
 	// File/collection size, for some prioritizer implementations.
 	// Units don't matter as long as they are consistent for a given use case.
