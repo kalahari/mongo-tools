@@ -220,6 +220,15 @@ func (restore *MongoRestore) CreateIntentForCollection(db, collection, fullpath 
 		Size:     file.Size(),
 	}
 
+	if intent.IsUsers() || intent.IsRoles() || intent.IsAuthVersion() || intent.IsSystemIndexes() {
+		intent.BSON, err = ioutil.ReadFile(intent.BSONPath)
+	} else { // oplog or regular collection data
+		intent.BSONFile, err = os.Open(intent.BSONPath)
+	}
+	if err != nil {
+		return fmt.Errorf("error reading BSON file %v: %v", intent.BSONPath, err)
+	}
+
 	// finally, check if it has a .metadata.json file in its folder
 	log.Logf(log.DebugLow, "scanning directory %v for metadata file", filepath.Dir(fullpath))
 	entries, err := ioutil.ReadDir(filepath.Dir(fullpath))

@@ -81,7 +81,6 @@ func (bd *BSONDump) JSON() (int, error) {
 	}
 
 	decodedStream := db.NewDecodedBSONSource(bd.bsonSource)
-	defer decodedStream.Close()
 
 	var result bson.Raw
 	for decodedStream.Next(&result) {
@@ -117,9 +116,6 @@ func (bd *BSONDump) Debug() (int, error) {
 	if bd.bsonSource == nil {
 		panic("Tried to call Debug() before opening file")
 	}
-
-	defer bd.bsonSource.Close()
-
 	reusableBuf := make([]byte, db.MaxBSONSize)
 	var result bson.Raw
 	for {

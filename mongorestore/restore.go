@@ -1,7 +1,6 @@
 package mongorestore
 
 import (
-	"bytes"
 	"fmt"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/intents"
@@ -145,7 +144,7 @@ func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
 		log.Logf(log.Always, "restoring %v from file %v", intent.Namespace(), intent.BSONPath)
 		var size int64
 
-		bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(bytes.NewReader(intent.BSON)))
+		bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(intent.BSONFile))
 
 		err = restore.RestoreCollectionToDB(intent.DB, intent.C, bsonSource, size)
 		if err != nil {
