@@ -30,6 +30,67 @@ func (dump *MongoDump) outputPath(dbName, colName string) string {
 	return filepath.Join(dump.OutputOptions.Out, dbName, colName)
 }
 
+// CreateOtherIntents create intents for irregular collections
+// puts it into the intent manager.
+func (dump *MongoDump) CreateOtherIntents() error {
+
+	oplogIntent * Intent
+	usersIntent * Intent
+	rolesIntent * Intent
+	versionIntent * Intent
+
+	// Oplog
+	if dump.OutputOptions.Oplog {
+
+	}
+
+	// UsersAndRoles
+	if dump.OutputOptions.DumpDBUsersAndRoles {
+
+	}
+
+	intent := &intents.Intent{
+		DB:           dbName,
+		C:            colName,
+		BSONPath:     dump.outputPath(dbName, colName) + ".bson",
+		MetadataPath: dump.outputPath(dbName, colName) + ".metadata.json",
+	}
+
+	intent.Metadata, err = os.Create(intent.MetadataPath)
+	if err != nil {
+		return err
+	}
+	intent.BSON, err = os.Create(intent.BSONPath)
+	if err != nil {
+		return err
+	}
+
+	// XXX FIX ME
+	// add stdout flags if we're using stdout
+	if dump.useStdout {
+		intent.BSONPath = "-"
+		intent.MetadataPath = "-"
+	}
+
+	// get a document count for scheduling purposes
+	session, err := dump.sessionProvider.GetSession()
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+
+	count, err := session.DB(dbName).C(colName).Count()
+	if err != nil {
+		return fmt.Errorf("error counting %v: %v", intent.Namespace(), err)
+	}
+	intent.Size = int64(count)
+	dump.manager.Put(intent)
+
+	log.Logf(log.DebugLow, "enqueued collection '%v'", intent.Namespace())
+
+	return nil
+}
+
 // CreateIntentsForCollection builds an intent for a given collection and
 // puts it into the intent manager.
 func (dump *MongoDump) CreateIntentForCollection(dbName, colName string) error {

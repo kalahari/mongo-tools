@@ -80,5 +80,5 @@ func (dump *MongoDump) DumpOplogAfterTimestamp(ts bson.MongoTimestamp, out io.Wr
 	queryObj := bson.M{"ts": bson.M{"$gt": ts}}
 	oplogQuery := session.DB("local").C(dump.oplogCollection).Find(queryObj).LogReplay()
 	return dump.dumpQueryToWriter(
-		oplogQuery, &intents.Intent{DB: "local", C: dump.oplogCollection}, out)
+		oplogQuery, &intents.Intent{DB: "local", C: dump.oplogCollection}, intent.BSONFile)
 }

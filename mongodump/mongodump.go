@@ -100,7 +100,7 @@ func (dump *MongoDump) Init() error {
 	if dump.OutputOptions.Repair && dump.isMongos {
 		return fmt.Errorf("--repair flag cannot be used on a mongos")
 	}
-	dump.manager = intents.NewIntentManager()
+	dump.manager = intents.NewCategorizingIntentManager()
 	dump.progressManager = progress.NewProgressBarManager(log.Writer(0), progressBarWaitTime)
 	return nil
 }
@@ -366,8 +366,8 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 		return nil
 	}
 
-	log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), intent.MetadataFilepath)
-	if err = dump.dumpMetadataToWriter(intent.DB, intent.C, intent.Metadata); err != nil {
+	log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), intent.MetadataPath)
+	if err = dump.dumpMetadataToWriter(intent.DB, intent.C, intent.MetadataFile); err != nil {
 		return err
 	}
 
