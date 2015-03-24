@@ -34,59 +34,66 @@ func (dump *MongoDump) outputPath(dbName, colName string) string {
 // puts it into the intent manager.
 func (dump *MongoDump) CreateOtherIntents() error {
 
-	oplogIntent * Intent
-	usersIntent * Intent
-	rolesIntent * Intent
-	versionIntent * Intent
+	oplogFilepath := filepath.Join(dump.OutputOptions.Out, "oplog.bson")
+	oplogOut, err := os.Create(oplogFilepath)
+	err = dump.determineOplogCollectionName()
 
-	// Oplog
-	if dump.OutputOptions.Oplog {
-
+	oplogIntent := &intents.Intent{
+		DB:       "local",
+		C:        dump.oplogCollection,
+		BSONFile: oplogOut,
+		BSONPath: oplogFilepath,
 	}
+	dump.manager.Put(oplogIntent)
+}
 
-	// UsersAndRoles
-	if dump.OutputOptions.DumpDBUsersAndRoles {
+// CreateOtherIntents create intents for irregular collections
+// puts it into the intent manager.
+func (dump *MongoDump) CreateUsersRolesVersionIntents() error {
 
-	}
-
-	intent := &intents.Intent{
-		DB:           dbName,
-		C:            colName,
-		BSONPath:     dump.outputPath(dbName, colName) + ".bson",
-		MetadataPath: dump.outputPath(dbName, colName) + ".metadata.json",
-	}
-
-	intent.Metadata, err = os.Create(intent.MetadataPath)
-	if err != nil {
-		return err
-	}
-	intent.BSON, err = os.Create(intent.BSONPath)
+	err = os.MkdirAll(filepath.Join(outDir, dump.ToolOptions.DBdbFolder), defaultPermissions)
 	if err != nil {
 		return err
 	}
 
-	// XXX FIX ME
-	// add stdout flags if we're using stdout
-	if dump.useStdout {
-		intent.BSONPath = "-"
-		intent.MetadataPath = "-"
-	}
-
-	// get a document count for scheduling purposes
-	session, err := dump.sessionProvider.GetSession()
+	usersPath := filepath.Join(outDir, dump.ToolOptions.DB, "$admin.system.users.bson")
+	usersFile, err := os.Create(usersPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("error creating file for db users: %v", err)
 	}
-	defer session.Close()
+	usersIntent := &intents.Intent{
+		DB:       "system",
+		C:        "users",
+		BSONPath: usersPath,
+		BSONFile: usersFile,
+	}
+	dump.manager.Put(usersIntent)
 
-	count, err := session.DB(dbName).C(colName).Count()
+	rolesPath := filepath.Join(outDir, dump.ToolOptions.DB, "$admin.system.roles.bson")
+	rolesFile, err := os.Create(rolesPath)
 	if err != nil {
-		return fmt.Errorf("error counting %v: %v", intent.Namespace(), err)
+		return fmt.Errorf("error creating file for db roles: %v", err)
 	}
-	intent.Size = int64(count)
-	dump.manager.Put(intent)
+	rolesIntent := &intents.Intent{
+		DB:       "system",
+		C:        "roles",
+		BSONPath: rolesPath,
+		BSONFile: rolesFile,
+	}
+	dump.manager.Put(rolesIntent)
 
-	log.Logf(log.DebugLow, "enqueued collection '%v'", intent.Namespace())
+	versionPath := filepath.Join(outDir, dump.ToolOptions.DB, "$admin.system.version.bson")
+	versionFile, err := os.Create(versionPath)
+	if err != nil {
+		return fmt.Errorf("error creating file for db auth version: %v", err)
+	}
+	versionIntent := &intents.Intent{
+		DB:       "system",
+		C:        "version",
+		BSONPath: versionPath,
+		BSONFile: versionFile,
+	}
+	dump.manager.Put(versionIntent)
 
 	return nil
 }
@@ -162,6 +169,7 @@ func (dump *MongoDump) CreateIntentsForDatabase(dbName string) error {
 			return err // no context needed
 		}
 	}
+	// XXX create users roles and versions here
 	return nil
 }
 
