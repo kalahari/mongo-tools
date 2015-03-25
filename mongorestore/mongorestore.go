@@ -44,6 +44,9 @@ type MongoRestore struct {
 	// a map of database names to a list of collection names
 	knownCollections      map[string][]string
 	knownCollectionsMutex sync.Mutex
+
+	// indexes belonging to dbs and collections
+	collectionIndexes map[string]map[string][]IndexDocument
 }
 
 // ParseAndValidateOptions returns a non-nil error if user-supplied options are invalid.
@@ -215,6 +218,11 @@ func (restore *MongoRestore) Restore() error {
 				"the users and roles collections in the dump have an incompatible auth version with target server: %v",
 				err)
 		}
+	}
+
+	err = restore.LoadIndexesFromBSON()
+	if err != nil {
+		return fmt.Errorf("restore error: %v", err)
 	}
 
 	// Restore the regular collections

@@ -16,8 +16,6 @@ import (
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"io"
-	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -161,7 +159,7 @@ func (dump *MongoDump) Dump() error {
 	}
 
 	if dump.OutputOptions.DumpDBUsersAndRoles && dump.ToolOptions.DB != "admin" {
-		err = dump.CreateUsersRolesVersionIntents()
+		err = dump.CreateUsersRolesVersionIntentsForDB(dump.ToolOptions.DB)
 		if err != nil {
 			return err
 		}
@@ -253,14 +251,8 @@ func (dump *MongoDump) Dump() error {
 		}
 		log.Logf(log.DebugHigh, "oplog entry %v still exists", dump.oplogStart)
 
-		// dump oplog in root of the dump folder
-		oplogFilepath := filepath.Join(dump.OutputOptions.Out, "oplog.bson")
-		oplogOut, err := os.Create(oplogFilepath)
-		if err != nil {
-			return fmt.Errorf("error creating bson file `%v`: %v", oplogFilepath, err)
-		}
-		log.Logf(log.Always, "writing captured oplog to %v", oplogFilepath)
-		err = dump.DumpOplogAfterTimestamp(dump.oplogStart, oplogOut)
+		log.Logf(log.Always, "writing captured oplog to %v", dump.manager.Oplog().BSONPath)
+		err = dump.DumpOplogAfterTimestamp(dump.oplogStart)
 		if err != nil {
 			return fmt.Errorf("error dumping oplog: %v", err)
 		}
@@ -361,31 +353,20 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 
 	if dump.useStdout {
 		log.Logf(log.Always, "writing %v to stdout", intent.Namespace())
-		return dump.dumpQueryToWriter(findQuery, intent, os.Stdout)
+		// XXX return dump.dumpQueryToWriter(findQuery, intent, os.Stdout)
 	}
-
-	dbFolder := filepath.Join(dump.OutputOptions.Out, intent.DB)
-	if err = os.MkdirAll(dbFolder, defaultPermissions); err != nil {
-		return fmt.Errorf("error creating folder `%v` for dump: %v", dbFolder, err)
-	}
-	outFilepath := filepath.Join(dbFolder, fmt.Sprintf("%v.bson", intent.C))
-	out, err := os.Create(outFilepath)
-	if err != nil {
-		return fmt.Errorf("error creating bson file `%v`: %v", outFilepath, err)
-	}
-	defer out.Close()
 
 	if !dump.OutputOptions.Repair {
-		log.Logf(log.Always, "writing %v to %v", intent.Namespace(), outFilepath)
-		if err = dump.dumpQueryToWriter(findQuery, intent, out); err != nil {
+		log.Logf(log.Always, "writing %v to %v", intent.Namespace(), intent.BSONPath)
+		if err = dump.dumpQueryToWriter(findQuery, intent); err != nil {
 			return err
 		}
 	} else {
 		// handle repairs as a special case, since we cannot count them
-		log.Logf(log.Always, "writing repair of %v to %v", intent.Namespace(), outFilepath)
+		log.Logf(log.Always, "writing repair of %v to %v", intent.Namespace(), intent.BSONPath)
 		repairIter := session.DB(intent.DB).C(intent.C).Repair()
 		repairCounter := progress.NewCounter(1) // this counter is ignored
-		if err := dump.dumpIterToWriter(repairIter, out, repairCounter); err != nil {
+		if err := dump.dumpIterToWriter(repairIter, intent.BSONFile, repairCounter); err != nil {
 			return fmt.Errorf("repair error: %v", err)
 		}
 		log.Logf(log.Always,
@@ -397,10 +378,10 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 		return nil
 	}
 	// XXX move this out of here
-	log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), intent.MetadataPath)
-	if err = dump.dumpMetadataToWriter(intent.DB, intent.C, intent.MetadataFile); err != nil {
-		return err
-	}
+	// log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), intent.MetadataPath)
+	// if err = dump.dumpMetadataToWriter(intent.DB, intent.C, intent.MetadataFile); err != nil {
+	// 	return err
+	// }
 	// XXX
 
 	log.Logf(log.Always, "done dumping %v", intent.Namespace())
@@ -497,19 +478,19 @@ func (dump *MongoDump) DumpUsersAndRolesForDB(db string) error {
 
 	dbQuery := bson.M{"db": db}
 	usersQuery := session.DB("admin").C("system.users").Find(dbQuery)
-	err = dump.dumpQueryToWriter(usersQuery, dump.manager.usersIntent)
+	err = dump.dumpQueryToWriter(usersQuery, dump.manager.Users())
 	if err != nil {
 		return fmt.Errorf("error dumping db users: %v", err)
 	}
 
 	rolesQuery := session.DB("admin").C("system.roles").Find(dbQuery)
-	err = dump.dumpQueryToWriter(rolesQuery, dump.manager.rolesIntent)
+	err = dump.dumpQueryToWriter(rolesQuery, dump.manager.Roles())
 	if err != nil {
 		return fmt.Errorf("error dumping db roles: %v", err)
 	}
 
 	versionQuery := session.DB("admin").C("system.version").Find(nil)
-	err = dump.dumpQueryToWriter(versionQuery, dump.manager.versionIntent)
+	err = dump.dumpQueryToWriter(versionQuery, dump.manager.AuthVersion())
 	if err != nil {
 		return fmt.Errorf("error dumping db auth version: %v", err)
 	}
@@ -520,15 +501,15 @@ func (dump *MongoDump) DumpUsersAndRolesForDB(db string) error {
 // DumpUsersAndRoles dumps all of the users and roles
 func (dump *MongoDump) DumpUsersAndRoles() error {
 
-	err := dump.DumpIntent(dump.manager.usersIntent)
+	err := dump.DumpIntent(dump.manager.Users())
 	if err != nil {
 		return err
 	}
-	err = dump.DumpIntent(dump.manager.rolesIntent)
+	err = dump.DumpIntent(dump.manager.Roles())
 	if err != nil {
 		return err
 	}
-	err = dump.DumpIntent(dump.manager.versionIntent)
+	err = dump.DumpIntent(dump.manager.AuthVersion())
 	if err != nil {
 		return err
 	}

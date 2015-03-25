@@ -7,6 +7,7 @@ import (
 	"github.com/mongodb/mongo-tools/common/log"
 	"github.com/mongodb/mongo-tools/common/progress"
 	"gopkg.in/mgo.v2/bson"
+	"io/ioutil"
 	"strings"
 	"time"
 )
@@ -104,19 +105,22 @@ func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
 	var indexes []IndexDocument
 
 	// get indexes from system.indexes dump if we have it but don't have metadata files
-	if intent.MetadataPath == "" && restore.manager.SystemIndexes(intent.DB) != nil {
-		systemIndexes := restore.manager.SystemIndexes(intent.DB)
-		log.Logf(log.Always, "no metadata file; reading indexes from %v", systemIndexes.BSONPath)
-		indexes, err = restore.IndexesFromBSON(intent, systemIndexes)
-		if err != nil {
-			return fmt.Errorf("error reading indexes from %v: %v", systemIndexes.BSONPath, err)
+	if intent.MetadataPath == "" {
+		if _, ok := restore.collectionIndexes[intent.DB]; ok {
+			if indexes, ok = restore.collectionIndexes[intent.DB][intent.C]; ok {
+				log.Logf(log.Always, "no metadata file; falling back to system.indexes")
+			}
 		}
 	}
 
 	// first create the collection with options from the metadata file
 	if intent.MetadataPath != "" {
 		log.Logf(log.Always, "reading metadata file from %v", intent.MetadataPath)
-		options, indexes, err = restore.MetadataFromJSON(intent.Metadata)
+		metadata, err := ioutil.ReadAll(intent.MetadataFile)
+		if err != nil {
+			return fmt.Errorf("error reading metadata file %v: %v", intent.MetadataPath, err)
+		}
+		options, indexes, err = restore.MetadataFromJSON(metadata)
 		if err != nil {
 			return fmt.Errorf("error parsing metadata file %v: %v", intent.MetadataPath, err)
 		}

@@ -131,11 +131,7 @@ func (restore *MongoRestore) CreateIntentsForDB(db, dir string) error {
 					BSONPath: filepath.Join(dir, entry.Name()),
 				}
 
-				if intent.IsUsers() || intent.IsRoles() || intent.IsAuthVersion() || intent.IsSystemIndexes() {
-					intent.BSON, err = ioutil.ReadFile(intent.BSONPath)
-				} else { // oplog or regular collection data
-					intent.BSONFile, err = os.Open(intent.BSONPath)
-				}
+				intent.BSONFile, err = os.Open(intent.BSONPath)
 				if err != nil {
 					return fmt.Errorf("error reading BSON file %v: %v", intent.BSONPath, err)
 				}
@@ -150,7 +146,7 @@ func (restore *MongoRestore) CreateIntentsForDB(db, dir string) error {
 					MetadataPath: filepath.Join(dir, entry.Name()),
 				}
 
-				intent.Metadata, err = ioutil.ReadFile(intent.MetadataPath)
+				intent.MetadataFile, err = os.Open(intent.MetadataPath)
 				if err != nil {
 					return err
 				}
@@ -220,11 +216,8 @@ func (restore *MongoRestore) CreateIntentForCollection(db, collection, fullpath 
 		Size:     file.Size(),
 	}
 
-	if intent.IsUsers() || intent.IsRoles() || intent.IsAuthVersion() || intent.IsSystemIndexes() {
-		intent.BSON, err = ioutil.ReadFile(intent.BSONPath)
-	} else { // oplog or regular collection data
-		intent.BSONFile, err = os.Open(intent.BSONPath)
-	}
+	intent.BSONFile, err = os.Open(intent.BSONPath)
+
 	if err != nil {
 		return fmt.Errorf("error reading BSON file %v: %v", intent.BSONPath, err)
 	}

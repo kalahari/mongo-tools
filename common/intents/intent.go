@@ -16,11 +16,12 @@ type Intent struct {
 
 	// File locations as absolute paths
 	BSONPath     string
-	BSONFile     io.ReadWriteCloser // only for collection bson or oplogs
-	BSON         []byte             // everything else
+	BSONFile     io.ReadWriteCloser
+	bson         []byte
 	BSONSize     int64
 	MetadataPath string
-	Metadata     []byte
+	MetadataFile io.ReadWriteCloser
+	metadata     []byte
 
 	// File/collection size, for some prioritizer implementations.
 	// Units don't matter as long as they are consistent for a given use case.
@@ -217,6 +218,15 @@ func (manager *Manager) Oplog() *Intent {
 // SystemIndexes returns the system.indexes bson for a database
 func (manager *Manager) SystemIndexes(dbName string) *Intent {
 	return manager.indexIntents[dbName]
+}
+
+// SystemIndexes returns the system.indexes bson for a database
+func (manager *Manager) SystemIndexDBs() []string {
+	dbs := []string{}
+	for dbname, _ := range manager.indexIntents {
+		dbs = append(dbs, dbname)
+	}
+	return dbs
 }
 
 // Users returns the intent of the users collection to restore, a special case
