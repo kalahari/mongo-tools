@@ -184,7 +184,17 @@ func (dump *MongoDump) Dump() error {
 	// IO Phase I
 	// metadata, users, roles, and versions
 
-	// XXX dump.DumpMetadata()
+	log.Logf(log.DebugLow, "Phase I: metadata, indexes, users, roles, version")
+
+	err = dump.DumpMetadata()
+	if err != nil {
+		return fmt.Errorf("error dumping metadata: %v", err)
+	}
+
+	err = dump.DumpSystemIndexes()
+	if err != nil {
+		return fmt.Errorf("error dumping system indexes: %v", err)
+	}
 
 	if dump.OutputOptions.DumpDBUsersAndRoles {
 		log.Logf(log.Always, "dumping users and roles for %v", dump.ToolOptions.DB)
@@ -223,6 +233,8 @@ func (dump *MongoDump) Dump() error {
 	// IO Phase II
 	// nomral collections
 
+	log.Logf(log.DebugLow, "Phase II: collections")
+
 	// kick off the progress bar manager and begin dumping intents
 	dump.progressManager.Start()
 	defer dump.progressManager.Stop()
@@ -234,6 +246,8 @@ func (dump *MongoDump) Dump() error {
 
 	// IO Phase III
 	// oplog
+
+	log.Logf(log.DebugLow, "Phase III: oplog")
 
 	// If we are capturing the oplog, we dump all oplog entries that occurred
 	// while dumping the database. Before and after dumping the oplog,
@@ -353,7 +367,7 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 
 	if dump.useStdout {
 		log.Logf(log.Always, "writing %v to stdout", intent.Namespace())
-		// XXX return dump.dumpQueryToWriter(findQuery, intent, os.Stdout)
+		return dump.dumpQueryToWriter(findQuery, intent)
 	}
 
 	if !dump.OutputOptions.Repair {
@@ -377,12 +391,6 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 	if intent.IsSystemIndexes() {
 		return nil
 	}
-	// XXX move this out of here
-	// log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), intent.MetadataPath)
-	// if err = dump.dumpMetadataToWriter(intent.DB, intent.C, intent.MetadataFile); err != nil {
-	// 	return err
-	// }
-	// XXX
 
 	log.Logf(log.Always, "done dumping %v", intent.Namespace())
 	return nil
@@ -498,21 +506,54 @@ func (dump *MongoDump) DumpUsersAndRolesForDB(db string) error {
 	return nil
 }
 
-// DumpUsersAndRoles dumps all of the users and roles
+// DumpUsersAndRoles dumps all of the users and roles and versions
+// TODO: This and DumpUsersAndRolesForDB should be merged, correctly
 func (dump *MongoDump) DumpUsersAndRoles() error {
+	var err error
+	if dump.manager.Users() != nil {
+		err = dump.DumpIntent(dump.manager.Users())
+		if err != nil {
+			return err
+		}
+	}
+	if dump.manager.Roles() != nil {
+		err = dump.DumpIntent(dump.manager.Roles())
+		if err != nil {
+			return err
+		}
+	}
+	if dump.manager.AuthVersion() != nil {
+		err = dump.DumpIntent(dump.manager.AuthVersion())
+		if err != nil {
+			return err
+		}
+	}
 
-	err := dump.DumpIntent(dump.manager.Users())
-	if err != nil {
-		return err
-	}
-	err = dump.DumpIntent(dump.manager.Roles())
-	if err != nil {
-		return err
-	}
-	err = dump.DumpIntent(dump.manager.AuthVersion())
-	if err != nil {
-		return err
-	}
+	return nil
+}
 
+// DumpSystemIndexes dumps all of the system.indexes
+func (dump *MongoDump) DumpSystemIndexes() error {
+	for _, dbName := range dump.manager.SystemIndexDBs() {
+		err := dump.DumpIntent(dump.manager.SystemIndexes(dbName))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DumpMetadata dumps the metadata for each intent in the manager
+// that has metadata
+func (dump *MongoDump) DumpMetadata() error {
+	allIntents := dump.manager.Intents()
+	for _, intent := range allIntents {
+		if intent.MetadataFile != nil {
+			err := dump.dumpMetadata(intent)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }

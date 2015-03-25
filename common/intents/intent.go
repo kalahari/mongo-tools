@@ -17,11 +17,11 @@ type Intent struct {
 	// File locations as absolute paths
 	BSONPath     string
 	BSONFile     io.ReadWriteCloser
-	bson         []byte
+	bson         []byte // read cache/buffer
 	BSONSize     int64
 	MetadataPath string
 	MetadataFile io.ReadWriteCloser
-	metadata     []byte
+	metadata     []byte // read cache/buffer
 
 	// File/collection size, for some prioritizer implementations.
 	// Units don't matter as long as they are consistent for a given use case.
@@ -162,11 +162,23 @@ func (manager *Manager) Put(intent *Intent) {
 		if existing.BSONPath == "" {
 			existing.BSONPath = intent.BSONPath
 		}
+		if existing.BSONFile == nil {
+			existing.BSONFile = intent.BSONFile
+		}
+		if existing.bson == nil {
+			existing.bson = intent.bson
+		}
 		if existing.Size == 0 {
 			existing.Size = intent.Size
 		}
 		if existing.MetadataPath == "" {
 			existing.MetadataPath = intent.MetadataPath
+		}
+		if existing.MetadataFile == nil {
+			existing.MetadataFile = intent.MetadataFile
+		}
+		if existing.metadata == nil {
+			existing.metadata = intent.metadata
 		}
 		return
 	}
@@ -174,6 +186,31 @@ func (manager *Manager) Put(intent *Intent) {
 	// if key doesn't already exist, add it to the manager
 	manager.intents[intent.Namespace()] = intent
 	manager.intentsByDiscoveryOrder = append(manager.intentsByDiscoveryOrder, intent)
+}
+
+// returns a slice containing all of the intents in the manager
+// Intents() is not thread safe
+func (manager *Manager) Intents() []Intent {
+	allIntents := []Intent{}
+	for _, intent := range manager.intents {
+		allIntents = append(allIntents, *intent)
+	}
+	for _, intent := range manager.indexIntents {
+		allIntents = append(allIntents, *intent)
+	}
+	if manager.oplogIntent != nil {
+		allIntents = append(allIntents, *manager.oplogIntent)
+	}
+	if manager.usersIntent != nil {
+		allIntents = append(allIntents, *manager.usersIntent)
+	}
+	if manager.rolesIntent != nil {
+		allIntents = append(allIntents, *manager.rolesIntent)
+	}
+	if manager.versionIntent != nil {
+		allIntents = append(allIntents, *manager.versionIntent)
+	}
+	return allIntents
 }
 
 // Pop returns the next available intent from the manager. If the manager is
@@ -220,7 +257,7 @@ func (manager *Manager) SystemIndexes(dbName string) *Intent {
 	return manager.indexIntents[dbName]
 }
 
-// SystemIndexes returns the system.indexes bson for a database
+// SystemIndexes returns the dbs for which there are system.indexes
 func (manager *Manager) SystemIndexDBs() []string {
 	dbs := []string{}
 	for dbname, _ := range manager.indexIntents {

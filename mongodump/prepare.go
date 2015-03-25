@@ -113,19 +113,23 @@ func (dump *MongoDump) CreateIntentForCollection(dbName, colName string) error {
 	}
 
 	intent := &intents.Intent{
-		DB:           dbName,
-		C:            colName,
-		BSONPath:     dump.outputPath(dbName, colName) + ".bson",
-		MetadataPath: dump.outputPath(dbName, colName) + ".metadata.json",
+		DB:       dbName,
+		C:        colName,
+		BSONPath: dump.outputPath(dbName, colName) + ".bson",
 	}
 	var err error
-	intent.MetadataFile, err = os.Create(intent.MetadataPath)
-	if err != nil {
-		return err
-	}
+
 	intent.BSONFile, err = os.Create(intent.BSONPath)
 	if err != nil {
 		return err
+	}
+
+	if !intent.IsSystemIndexes() {
+		intent.MetadataPath = dump.outputPath(dbName, colName) + ".metadata.json"
+		intent.MetadataFile, err = os.Create(intent.MetadataPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	// add stdout flags if we're using stdout
@@ -184,7 +188,7 @@ func (dump *MongoDump) CreateAllIntents() error {
 	if err != nil {
 		return fmt.Errorf("error getting database names: %v", err)
 	}
-	log.Logf(log.DebugHigh, "found databases: %v", strings.Join(dbs, ", "))
+	log.Logf(log.DebugHigh, "!found databases: %v", strings.Join(dbs, ", "))
 	for _, dbName := range dbs {
 		if dbName == "local" {
 			// local can only be explicitly dumped

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"github.com/mongodb/mongo-tools/common/bsonutil"
 	"github.com/mongodb/mongo-tools/common/db"
+	"github.com/mongodb/mongo-tools/common/intents"
 	"github.com/mongodb/mongo-tools/common/log"
 	"gopkg.in/mgo.v2/bson"
-	"io"
 )
 
 // Metadata holds information about a collection's options and indexes.
@@ -25,11 +25,11 @@ type IndexDocumentFromDB struct {
 
 // dumpMetadataToWriter gets the metadata for a collection and writes it
 // in readable JSON format.
-func (dump *MongoDump) dumpMetadataToWriter(dbName, c string, writer io.Writer) error {
+func (dump *MongoDump) dumpMetadata(intent intents.Intent) error {
 	// make a buffered writer for nicer disk i/o
-	w := bufio.NewWriter(writer)
+	w := bufio.NewWriter(intent.MetadataFile)
 
-	nsID := fmt.Sprintf("%v.%v", dbName, c)
+	nsID := fmt.Sprintf("%v.%v", intent.DB, intent.C)
 	meta := Metadata{
 		// We have to initialize Indexes to an empty slice, not nil, so that an empty
 		// array is marshalled into json instead of null. That is, {indexes:[]} is okay
@@ -50,7 +50,7 @@ func (dump *MongoDump) dumpMetadataToWriter(dbName, c string, writer io.Writer) 
 	}
 	defer session.Close()
 	session.SetSocketTimeout(0)
-	collection := session.DB(dbName).C(c)
+	collection := session.DB(intent.DB).C(intent.C)
 
 	collectionInfo, err := db.GetCollectionOptions(collection)
 	if err != nil {
