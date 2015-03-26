@@ -165,7 +165,6 @@ func readBSONIntoDatabase(dir, restoreDBName string) error {
 		defer file.Close()
 
 		bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(file))
-		defer bsonSource.Close()
 
 		var result bson.M
 		for bsonSource.Next(&result) {
