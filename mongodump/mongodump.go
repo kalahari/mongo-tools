@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/mongodb/mongo-tools/common/auth"
 	"github.com/mongodb/mongo-tools/common/bsonutil"
+	"github.com/mongodb/mongo-tools/common/chunktar"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/intents"
 	"github.com/mongodb/mongo-tools/common/json"
@@ -46,13 +47,14 @@ type MongoDump struct {
 	isMongos        bool
 	authVersion     int
 	progressManager *progress.Manager
+	chunkWriter     *chunktar.Writer
 }
 
 // ValidateOptions checks for any incompatible sets of options.
 func (dump *MongoDump) ValidateOptions() error {
 	switch {
-	case dump.OutputOptions.Out == "-" && dump.ToolOptions.Namespace.Collection == "":
-		return fmt.Errorf("can only dump a single collection to stdout")
+	case dump.OutputOptions.Out == "-" && !dump.OutputOptions.Tar && dump.ToolOptions.Namespace.Collection == "":
+		return fmt.Errorf("can only dump a single collection or tar archive to stdout")
 	case dump.ToolOptions.Namespace.DB == "" && dump.ToolOptions.Namespace.Collection != "":
 		return fmt.Errorf("cannot dump a collection without a specified database")
 	case dump.InputOptions.Query != "" && dump.ToolOptions.Namespace.Collection == "":
@@ -99,6 +101,9 @@ func (dump *MongoDump) Init() error {
 	// return a helpful error message for mongos
 	if dump.OutputOptions.Repair && dump.isMongos {
 		return fmt.Errorf("--repair flag cannot be used on a mongos")
+	}
+	if dump.OutputOptions.Tar {
+
 	}
 	dump.manager = intents.NewIntentManager()
 	dump.progressManager = progress.NewProgressBarManager(log.Writer(0), progressBarWaitTime)
@@ -185,6 +190,24 @@ func (dump *MongoDump) Dump() error {
 		}
 	}
 
+	// If tar is enabled, create a new tar.Writer on a new file
+	// or stdout
+	if dump.OutputOptions.Tar {
+		if dump.useStdout {
+			dump.chunkWriter = chunktar.NewWriter(os.Stdout)
+			defer dump.chunkWriter.Close()
+		} else {
+			out, err := os.Create(dump.OutputOptions.Out)
+			if err != nil {
+				return fmt.Errorf("error creating tar file `%v`: %v", dump.OutputOptions.Out, err)
+			}
+			defer out.Close()
+
+			dump.chunkWriter = chunktar.NewWriter(out)
+			defer dump.chunkWriter.Close()
+		}
+	}
+
 	// kick off the progress bar manager and begin dumping intents
 	dump.progressManager.Start()
 	defer dump.progressManager.Stop()
@@ -211,8 +234,17 @@ func (dump *MongoDump) Dump() error {
 		log.Logf(log.DebugHigh, "oplog entry %v still exists", dump.oplogStart)
 
 		// dump oplog in root of the dump folder
-		oplogFilepath := filepath.Join(dump.OutputOptions.Out, "oplog.bson")
-		oplogOut, err := os.Create(oplogFilepath)
+		var oplogOut io.Writer
+		var oplogFilepath string
+		const oplogFileName = "oplog.bson"
+		if dump.OutputOptions.Tar {
+			oplogFilepath = oplogFileName
+			oplogOut = dump.chunkWriter
+			err = dump.chunkWriter.WriteHeader(oplogFileName)
+		} else {
+			oplogFilepath = filepath.Join(dump.OutputOptions.Out, oplogFileName)
+			oplogOut, err = os.Create(oplogFilepath)
+		}
 		if err != nil {
 			return fmt.Errorf("error creating bson file `%v`: %v", oplogFilepath, err)
 		}
