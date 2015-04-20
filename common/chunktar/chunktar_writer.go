@@ -4,21 +4,17 @@ import (
 	"archive/tar"
 	"bytes"
 	"fmt"
+	"github.com/mongodb/mongo-tools/common/log"
+	"github.com/mongodb/mongo-tools/common/util"
 	"io"
 	"sync"
+	"time"
 )
 
 const (
 	bufferThreshold = 4 * 1024 * 1024
 	bufferLimit     = bufferThreshold * 2
 )
-
-func min(a, b int) int {
-	if a > b {
-		return b
-	}
-	return a
-}
 
 type Writer struct {
 	tarWriter    *tar.Writer
@@ -28,6 +24,7 @@ type Writer struct {
 	open         bool
 	wait         *sync.WaitGroup
 	name         string
+	chunkCount   uint64
 }
 
 func NewWriter(out io.Writer) *Writer {
@@ -76,8 +73,12 @@ func (w *Writer) Flush() (err error) {
 }
 
 func (w *Writer) Write(b []byte) (n int, err error) {
+	if !w.open {
+		err = fmt.Errorf("chunktar.Writer not open")
+		return
+	}
 	writeSize := len(b)
-	for start, stop := 0, min(writeSize, bufferLimit-w.inputBuffer.Len()); start < writeSize; start, stop = stop, min(stop+bufferLimit, writeSize) {
+	for start, stop := 0, util.MinInt(writeSize, bufferLimit-w.inputBuffer.Len()); start < writeSize; start, stop = stop, util.MinInt(stop+bufferLimit, writeSize) {
 		if start > 0 {
 			err = w.swapInOut()
 			if err != nil {
@@ -100,11 +101,17 @@ func (w *Writer) Write(b []byte) (n int, err error) {
 }
 
 func (w *Writer) WriteHeader(name string) (err error) {
+	if !w.open {
+		err = fmt.Errorf("chunktar.Writer not open")
+		return
+	}
 	err = w.Flush()
 	if err != nil {
 		return
 	}
 	w.name = name
+	w.chunkCount = 0
+	log.Logf(log.DebugLow, "now writing chunks to %v", w.name)
 	return
 }
 
@@ -114,16 +121,26 @@ func (w *Writer) swapInOut() (err error) {
 		err = w.outputError
 		return
 	}
+	// this will get us to about 4 exabytes of chunks without going wider than padding
+	chunkName := fmt.Sprintf("%s.%012d", w.name, w.chunkCount)
+	w.chunkCount++
 	w.inputBuffer, w.outputBuffer = w.outputBuffer, w.inputBuffer
+	log.Logf(log.DebugLow, "writing %d byte chunk to %v", w.outputBuffer.Len(), chunkName)
 	w.wait.Add(1)
-	go w.writeOutput()
+	go w.writeOutput(chunkName)
 	w.inputBuffer.Reset()
 	return
 }
 
-func (w *Writer) writeOutput() {
+func (w *Writer) writeOutput(chunkName string) {
 	defer w.wait.Done()
-	err := w.tarWriter.WriteHeader(&tar.Header{Name: w.name, Size: int64(w.outputBuffer.Len())})
+	header := &tar.Header{
+		Name:    chunkName,
+		Mode:    0644,
+		Size:    int64(w.outputBuffer.Len()),
+		ModTime: time.Now(),
+	}
+	err := w.tarWriter.WriteHeader(header)
 	if err != nil {
 		w.outputError = err
 		return

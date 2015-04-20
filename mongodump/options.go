@@ -22,7 +22,7 @@ func (_ *InputOptions) Name() string {
 // OutputOptions defines the set of options for writing dump data.
 type OutputOptions struct {
 	Out                        string   `long:"out" short:"o" description:"output directory, or '-' for stdout (defaults to 'dump')" default:"dump" default-mask:"-"`
-	Tar	                       bool     `log:"tar" short:"t" description:"package the .bson files in a tar archive and output as a single file"`
+	Tar                        bool     `long:"tar" description:"package the .bson files in a tar archive and output as a single file"`
 	Repair                     bool     `long:"repair" description:"try to recover documents from damaged data files (not supported by all storage engines)"`
 	Oplog                      bool     `long:"oplog" description:"use oplog for taking a point-in-time snapshot"`
 	DumpDBUsersAndRoles        bool     `long:"dumpDbUsersAndRoles" description:"dump user and role definitions for the specified database"`

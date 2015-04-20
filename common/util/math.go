@@ -13,6 +13,14 @@ func MaxInt(a, b int) int {
 	return b
 }
 
+// Return the min of two ints
+func MinInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // Numeric Conversion Tools
 
 type converterFunc func(interface{}) (interface{}, error)
