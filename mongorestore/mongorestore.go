@@ -4,6 +4,7 @@ package mongorestore
 import (
 	"fmt"
 	"github.com/mongodb/mongo-tools/common/auth"
+	"github.com/mongodb/mongo-tools/common/chunktar"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/intents"
 	"github.com/mongodb/mongo-tools/common/log"
@@ -44,6 +45,8 @@ type MongoRestore struct {
 	// a map of database names to a list of collection names
 	knownCollections      map[string][]string
 	knownCollectionsMutex sync.Mutex
+
+	chunkReader *chunktar.Reader
 }
 
 // ParseAndValidateOptions returns a non-nil error if user-supplied options are invalid.
@@ -131,7 +134,7 @@ func (restore *MongoRestore) ParseAndValidateOptions() error {
 	// a single dash signals reading from stdin
 	if restore.TargetDirectory == "-" {
 		restore.useStdin = true
-		if restore.ToolOptions.Collection == "" {
+		if !restore.InputOptions.Tar && restore.ToolOptions.Collection == "" {
 			return fmt.Errorf("cannot restore from stdin without a specified collection")
 		}
 	}
@@ -151,11 +154,19 @@ func (restore *MongoRestore) Restore() error {
 	restore.manager = intents.NewCategorizingIntentManager()
 
 	// handle cases where the user passes in a file instead of a directory
+	// isBSON really checks if the specified path is a file
 	if isBSON(restore.TargetDirectory) {
 		log.Log(log.DebugLow, "mongorestore target is a file, not a directory")
-		err = restore.handleBSONInsteadOfDirectory(restore.TargetDirectory)
-		if err != nil {
-			return err
+		if !restore.InputOptions.Tar {
+			err = restore.handleBSONInsteadOfDirectory(restore.TargetDirectory)
+			if err != nil {
+				return err
+			}
+		} else {
+			restore.chunkReader, err = chunktar.NewReader(restore.TargetDirectory)
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		log.Log(log.DebugLow, "mongorestore target is a directory, not a file")

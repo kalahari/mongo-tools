@@ -16,6 +16,7 @@ type InputOptions struct {
 	OplogLimit             string `long:"oplogLimit" description:"only include oplog entries before the provided Timestamp (seconds[:ordinal])"`
 	RestoreDBUsersAndRoles bool   `long:"restoreDbUsersAndRoles" description:"restore user and role definitions for the given database"`
 	Directory              string `long:"dir" description:"input directory, use '-' for stdin"`
+	Tar                    bool   `long:"tar" description:"input directory is a tar archive, instead of a directory"`
 }
 
 // Name returns a human-readable group name for input options.
