@@ -13,6 +13,8 @@ import (
 	"github.com/mongodb/mongo-tools/common/util"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"io"
+	"os"
 	"sync"
 )
 
@@ -46,7 +48,7 @@ type MongoRestore struct {
 	knownCollections      map[string][]string
 	knownCollectionsMutex sync.Mutex
 
-	chunkReader *chunktar.Reader
+	//chunkReader *chunktar.Reader
 }
 
 // ParseAndValidateOptions returns a non-nil error if user-supplied options are invalid.
@@ -150,23 +152,27 @@ func (restore *MongoRestore) Restore() error {
 		return err
 	}
 
+	if restore.InputOptions.Tar {
+		err = restore.RestoreTarDump()
+	} else {
+		err = restore.RestoreFileDump()
+	}
+	return err
+}
+
+// restore from file(s) dump
+func (restore *MongoRestore) RestoreFileDump() error {
+	var err error
+
 	// Build up all intents to be restored
 	restore.manager = intents.NewCategorizingIntentManager()
 
 	// handle cases where the user passes in a file instead of a directory
-	// isBSON really checks if the specified path is a file
 	if isBSON(restore.TargetDirectory) {
 		log.Log(log.DebugLow, "mongorestore target is a file, not a directory")
-		if !restore.InputOptions.Tar {
-			err = restore.handleBSONInsteadOfDirectory(restore.TargetDirectory)
-			if err != nil {
-				return err
-			}
-		} else {
-			restore.chunkReader, err = chunktar.NewReader(restore.TargetDirectory)
-			if err != nil {
-				return err
-			}
+		err = restore.handleBSONInsteadOfDirectory(restore.TargetDirectory)
+		if err != nil {
+			return err
 		}
 	} else {
 		log.Log(log.DebugLow, "mongorestore target is a directory, not a file")
@@ -265,6 +271,28 @@ func (restore *MongoRestore) Restore() error {
 		if err != nil {
 			return fmt.Errorf("restore error: %v", err)
 		}
+	}
+
+	log.Log(log.Always, "done")
+	return nil
+}
+
+func (restore *MongoRestore) RestoreTarDump() error {
+	log.Log(log.Always, "restoring from a tar archive, unable to find file errors before restore begins")
+
+	var chunkReader *chunktar.Reader
+	if restore.useStdin {
+		chunkReader = chunktar.NewReader(os.Stdin)
+	} else {
+		file, err := os.Open(restore.InputOptions.Directory)
+		if err != nil {
+			return fmt.Errorf("unable to open tar archive file `%v` for reading: %v", restore.InputOptions.Directory, err)
+		}
+		chunkReader = chunktar.NewReader(file)
+	}
+
+	for name, err := chunkReader.Next(); err != io.EOF; {
+		log.Logf(log.DebugHigh, "next file in tar archive `%v`", name)
 	}
 
 	log.Log(log.Always, "done")
