@@ -75,9 +75,11 @@ func (dump *MongoDump) CreateIntentForCollection(dbName, colName string) error {
 func (dump *MongoDump) CreateIntentsForDatabase(dbName string) error {
 	// we must ensure folders for empty databases are still created, for legacy purposes
 	dbFolder := filepath.Join(dump.OutputOptions.Out, dbName)
-	err := os.MkdirAll(dbFolder, defaultPermissions)
-	if err != nil {
-		return fmt.Errorf("error creating directory `%v`: %v", dbFolder, err)
+	if !dump.OutputOptions.Tar {
+		err := os.MkdirAll(dbFolder, defaultPermissions)
+		if err != nil {
+			return fmt.Errorf("error creating directory `%v`: %v", dbFolder, err)
+		}
 	}
 
 	cols, err := dump.sessionProvider.CollectionNames(dbName)

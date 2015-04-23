@@ -361,7 +361,24 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 		return dump.dumpQueryToWriter(findQuery, intent, os.Stdout)
 	}
 
-	err, out, outFilepath, dispose := dump.getOutputWriter(intent.DB, fmt.Sprintf("%v.bson", intent.C), true)
+	// dump metadat first, tar restore needs the metadata before the collection
+	createDir := true
+	// don't dump metatdata for SystemIndexes collection
+	if !intent.IsSystemIndexes() {
+		err, metaOut, metadataFilepath, dispose := dump.getOutputWriter(intent.DB, fmt.Sprintf("%v.metadata.json", intent.C), createDir)
+		if err != nil {
+			return err
+		}
+		defer dispose()
+		createDir = false
+
+		log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), metadataFilepath)
+		if err = dump.dumpMetadataToWriter(intent.DB, intent.C, metaOut); err != nil {
+			return err
+		}
+	}
+
+	err, out, outFilepath, dispose := dump.getOutputWriter(intent.DB, fmt.Sprintf("%v.bson", intent.C), createDir)
 	if err != nil {
 		return err
 	}
@@ -382,22 +399,6 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 		}
 		log.Logf(log.Always,
 			"\trepair cursor found %v documents in %v", repairCounter, intent.Namespace())
-	}
-
-	// don't dump metatdata for SystemIndexes collection
-	if intent.IsSystemIndexes() {
-		return nil
-	}
-
-	err, metaOut, metadataFilepath, dispose := dump.getOutputWriter(intent.DB, fmt.Sprintf("%v.metadata.json", intent.C), false)
-	if err != nil {
-		return err
-	}
-	defer dispose()
-
-	log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), metadataFilepath)
-	if err = dump.dumpMetadataToWriter(intent.DB, intent.C, metaOut); err != nil {
-		return err
 	}
 
 	log.Logf(log.Always, "done dumping %v", intent.Namespace())
@@ -534,11 +535,11 @@ func (dump *MongoDump) DumpUsersAndRolesForDB(db string) error {
 // return an io.Writer for a file or tar archive depending on output flags
 func (dump *MongoDump) getOutputWriter(directory, file string, createDir bool) (err error, writer io.Writer, writerPath string, dispose func()) {
 	if dump.OutputOptions.Tar {
-		// tar always uses forward slash for path separator
 		if directory == "" {
 			writerPath = file
 		} else {
-			writerPath = fmt.Sprintf("%s/%s", directory, file)
+			// tar always uses forward slash for path separator
+			writerPath = filepath.ToSlash(filepath.Join(directory, file))
 		}
 		err = dump.chunkWriter.WriteHeader(writerPath)
 		writer = dump.chunkWriter

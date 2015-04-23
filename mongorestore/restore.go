@@ -1,6 +1,7 @@
 package mongorestore
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/intents"
@@ -77,10 +78,52 @@ func (restore *MongoRestore) RestoreIntents() error {
 
 // RestoreIntent attempts to restore a given intent into MongoDB.
 func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
+	collectionExists, err := restore.RestoreBeginCollection(intent)
+	if err != nil {
+		return err
+	}
 
+	var indexes []IndexDocument
+
+	// get indexes from system.indexes dump if we have it but don't have metadata files
+	if intent.MetadataPath == "" && restore.manager.SystemIndexes(intent.DB) != nil {
+		systemIndexesFile := restore.manager.SystemIndexes(intent.DB).BSONPath
+		log.Logf(log.Always, "no metadata file; reading indexes from %v", systemIndexesFile)
+		indexes, err = restore.IndexesFromBSON(intent, systemIndexesFile)
+		if err != nil {
+			return fmt.Errorf("error reading indexes from %v: %v", systemIndexesFile, err)
+		}
+	}
+
+	// first create the collection with options from the metadata file
+	metaIndexes, err := restore.RestoreCollectionMetadata(intent, collectionExists)
+	if err != nil {
+		return err
+	}
+	if metaIndexes != nil {
+		indexes = metaIndexes
+	}
+
+	// then do bson
+	err = restore.RestoreCollectionBSON(intent)
+	if err != nil {
+		return err
+	}
+
+	// finally, add indexes
+	err = restore.RestoreCollectionIndexes(intent, indexes)
+	if err != nil {
+		return err
+	}
+
+	log.Logf(log.Always, "finished restoring %v", intent.Namespace())
+	return nil
+}
+
+func (restore *MongoRestore) RestoreBeginCollection(intent *intents.Intent) (bool, error) {
 	collectionExists, err := restore.CollectionExists(intent)
 	if err != nil {
-		return fmt.Errorf("error reading database: %v", err)
+		return collectionExists, fmt.Errorf("error reading database: %v", err)
 	}
 
 	if restore.safety == nil && !restore.OutputOptions.Drop && collectionExists {
@@ -96,7 +139,7 @@ func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
 				log.Logf(log.Info, "dropping collection %v before restoring", intent.Namespace())
 				err = restore.DropCollection(intent)
 				if err != nil {
-					return err // no context needed
+					return false, err // no context needed
 				}
 				collectionExists = false
 			}
@@ -104,30 +147,31 @@ func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
 			log.Logf(log.DebugLow, "collection %v doesn't exist, skipping drop command", intent.Namespace())
 		}
 	}
+	return collectionExists, nil
+}
 
+func (restore *MongoRestore) RestoreCollectionMetadata(intent *intents.Intent, collectionExists bool) ([]IndexDocument, error) {
 	var options bson.D
 	var indexes []IndexDocument
-
-	// get indexes from system.indexes dump if we have it but don't have metadata files
-	if intent.MetadataPath == "" && restore.manager.SystemIndexes(intent.DB) != nil {
-		systemIndexesFile := restore.manager.SystemIndexes(intent.DB).BSONPath
-		log.Logf(log.Always, "no metadata file; reading indexes from %v", systemIndexesFile)
-		indexes, err = restore.IndexesFromBSON(intent, systemIndexesFile)
-		if err != nil {
-			return fmt.Errorf("error reading indexes from %v: %v", systemIndexesFile, err)
-		}
-	}
-
-	// first create the collection with options from the metadata file
 	if intent.MetadataPath != "" {
-		log.Logf(log.Always, "reading metadata file from %v", intent.MetadataPath)
-		jsonBytes, err := ioutil.ReadFile(intent.MetadataPath)
+		var jsonBytes []byte
+		var err error
+		if restore.InputOptions.Tar {
+			log.Log(log.Always, "reading metadata file from tar archive")
+			buff := &bytes.Buffer{}
+			_, err = buff.ReadFrom(intent.Reader)
+			jsonBytes = make([]byte, buff.Len())
+			_ = copy(jsonBytes, buff.Bytes())
+		} else {
+			log.Logf(log.Always, "reading metadata file from %v", intent.MetadataPath)
+			jsonBytes, err = ioutil.ReadFile(intent.MetadataPath)
+		}
 		if err != nil {
-			return fmt.Errorf("error reading metadata file %v: %v", intent.MetadataPath, err)
+			return nil, fmt.Errorf("error reading metadata file %v: %v", intent.MetadataPath, err)
 		}
 		options, indexes, err = restore.MetadataFromJSON(jsonBytes)
 		if err != nil {
-			return fmt.Errorf("error parsing metadata file %v: %v", intent.MetadataPath, err)
+			return nil, fmt.Errorf("error parsing metadata file %v: %v", intent.MetadataPath, err)
 		}
 		if !restore.OutputOptions.NoOptionsRestore {
 			if options != nil {
@@ -135,7 +179,7 @@ func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
 					log.Logf(log.Info, "creating collection %v using options from metadata", intent.Namespace())
 					err = restore.CreateCollection(intent, options)
 					if err != nil {
-						return fmt.Errorf("error creating collection %v: %v", intent.Namespace(), err)
+						return nil, fmt.Errorf("error creating collection %v: %v", intent.Namespace(), err)
 					}
 				} else {
 					log.Logf(log.Info, "collection %v already exists", intent.Namespace())
@@ -147,14 +191,21 @@ func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
 			log.Log(log.Info, "skipping options restoration")
 		}
 	}
+	return indexes, nil
+}
 
-	// then do bson
+func (restore *MongoRestore) RestoreCollectionBSON(intent *intents.Intent) error {
 	if intent.BSONPath != "" {
 		log.Logf(log.Always, "restoring %v from file %v", intent.Namespace(), intent.BSONPath)
 		var rawBSONSource io.ReadCloser
 		var size int64
 
-		if restore.useStdin {
+		if restore.InputOptions.Tar {
+			// closing the chunktar.Reader would prevent reading
+			// remaining files, so we just avoid closing it
+			rawBSONSource = ioutil.NopCloser(intent.Reader)
+			log.Log(log.Always, "restoring from tar archive")
+		} else if restore.useStdin {
 			// closing stdin results in inconsistent behavior between
 			// environments, so we just avoid closing it
 			rawBSONSource = ioutil.NopCloser(os.Stdin)
@@ -176,24 +227,11 @@ func (restore *MongoRestore) RestoreIntent(intent *intents.Intent) error {
 		bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(rawBSONSource))
 		defer bsonSource.Close()
 
-		err = restore.RestoreCollectionToDB(intent.DB, intent.C, bsonSource, size)
+		err := restore.RestoreCollectionToDB(intent.DB, intent.C, bsonSource, size)
 		if err != nil {
 			return fmt.Errorf("error restoring from %v: %v", intent.BSONPath, err)
 		}
 	}
-
-	// finally, add indexes
-	if len(indexes) > 0 && !restore.OutputOptions.NoIndexRestore {
-		log.Logf(log.Always, "restoring indexes for collection %v from metadata", intent.Namespace())
-		err = restore.CreateIndexes(intent, indexes)
-		if err != nil {
-			return fmt.Errorf("error creating indexes for %v: %v", intent.Namespace(), err)
-		}
-	} else {
-		log.Log(log.Always, "no indexes to restore")
-	}
-
-	log.Logf(log.Always, "finished restoring %v", intent.Namespace())
 	return nil
 }
 
@@ -296,6 +334,19 @@ func (restore *MongoRestore) RestoreCollectionToDB(dbName, colName string,
 	// final error check
 	if err = bsonSource.Err(); err != nil {
 		return fmt.Errorf("reading bson input: %v", err)
+	}
+	return nil
+}
+
+func (restore *MongoRestore) RestoreCollectionIndexes(intent *intents.Intent, indexes []IndexDocument) error {
+	if len(indexes) > 0 && !restore.OutputOptions.NoIndexRestore {
+		log.Logf(log.Always, "restoring indexes for collection %v from metadata", intent.Namespace())
+		err := restore.CreateIndexes(intent, indexes)
+		if err != nil {
+			return fmt.Errorf("error creating indexes for %v: %v", intent.Namespace(), err)
+		}
+	} else {
+		log.Log(log.Always, "no indexes to restore")
 	}
 	return nil
 }
