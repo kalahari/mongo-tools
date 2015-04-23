@@ -10,6 +10,8 @@ import (
 	"github.com/mongodb/mongo-tools/common/util"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"io"
+	"io/ioutil"
 	"os"
 	"strings"
 )
@@ -98,25 +100,41 @@ func (restore *MongoRestore) IndexesFromBSON(intent *intents.Intent, bsonFile st
 	if err != nil {
 		return nil, fmt.Errorf("error reading index bson file %v: %v", bsonFile, err)
 	}
+	defer rawFile.Close()
+	indexes, err := restore.IndexesFromBSONReader(intent.C, rawFile)
+	if err != nil {
+		return nil, err
+	}
+	return indexes[intent.C], nil
+}
 
-	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(rawFile))
+// extract inedexes from an io.Reader of BSON data, optionally filtered by collection
+func (restore *MongoRestore) IndexesFromBSONReader(collection string, reader io.Reader) (map[string][]IndexDocument, error) {
+	bsonSource := db.NewDecodedBSONSource(db.NewBSONSource(ioutil.NopCloser(reader)))
 	defer bsonSource.Close()
-
 	// iterate over stored indexes, saving all that match the collection
 	indexDocument := &IndexDocument{}
-	collectionIndexes := []IndexDocument{}
+	indexes := make(map[string][]IndexDocument)
 	for bsonSource.Next(indexDocument) {
 		namespace := indexDocument.Options["ns"].(string)
-		if stripDBFromNS(namespace) == intent.C {
-			log.Logf(log.DebugHigh, "\tfound index %v", indexDocument.Options["name"])
-			collectionIndexes = append(collectionIndexes, *indexDocument)
+		docCollection := stripDBFromNS(namespace)
+		if collection == "" || collection == docCollection {
+			if indexes[docCollection] == nil {
+				indexes[docCollection] = make([]IndexDocument, 1)
+			}
+			log.Logf(log.DebugHigh, "\tfound index %v for collection %v", indexDocument.Options["name"], docCollection)
+			indexes[docCollection] = append(indexes[docCollection], *indexDocument)
 		}
 	}
 	if bsonSource.Err() != nil {
-		return nil, fmt.Errorf("error scanning system.indexes for %v indexes: %v", intent.C, err)
+		return nil, fmt.Errorf("error scanning system.indexes for %v indexes: %v", collection, bsonSource.Err())
 	}
 
-	return collectionIndexes, nil
+	if collection != "" && indexes[collection] == nil {
+		indexes[collection] = make([]IndexDocument, 0)
+	}
+
+	return indexes, nil
 }
 
 func stripDBFromNS(ns string) string {

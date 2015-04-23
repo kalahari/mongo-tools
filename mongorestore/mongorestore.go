@@ -15,6 +15,7 @@ import (
 	"gopkg.in/mgo.v2/bson"
 	"io"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -321,11 +322,13 @@ func (restore *MongoRestore) RestoreTarDump() error {
 			continue
 		}
 
-		if err = util.ValidateCollectionName(collection); err != nil {
+		if err = util.ValidateCollectionGrammar(collection); err != nil {
 			log.Logf(log.Always, "invalid collection name '%v': %v, skipping...", db, err)
 			err = nil
 			continue
 		}
+
+		isSystemCollection := strings.HasPrefix(collection, "system.")
 
 		if db != state.CurrentDb {
 			if state.SingleDb {
@@ -342,7 +345,7 @@ func (restore *MongoRestore) RestoreTarDump() error {
 		}
 
 		if collection != state.CurrentCollection {
-			if state.SingleCollection {
+			if state.SingleCollection && !isSystemCollection {
 				log.Logf(log.Always, "file `%v` is not for restore database `%v` and collection `%v`, skipping...",
 					fileName, state.CurrentDb, state.CurrentCollection)
 				continue
@@ -366,21 +369,27 @@ func (restore *MongoRestore) RestoreTarDump() error {
 		}
 		state.Intent.Reader = chunkReader
 
-		if !state.RestoredMetadata && !state.RestoredBSON {
+		if !state.RestoredMetadata && !state.RestoredBSON && !isSystemCollection {
 			state.CollectionExists, err = restore.RestoreBeginCollection(state.Intent)
 			if err != nil {
 				return err
 			}
 		}
 
-		if fileType == MetadataFileType {
-			state.Indexes, err = restore.RestoreCollectionMetadata(state.Intent, state.CollectionExists)
+		if fileType == MetadataFileType && !isSystemCollection {
+			state.MetadataIndexes, err = restore.RestoreCollectionMetadata(state.Intent, state.CollectionExists)
 			if err != nil {
 				return err
 			}
 			state.RestoredMetadata = true
 		} else if fileType == BSONFileType {
-			err = restore.RestoreCollectionBSON(state.Intent)
+			if collection == "system.indexes" && !restore.OutputOptions.NoIndexRestore {
+				state.SystemIndexes, err = restore.IndexesFromBSONReader(restore.ToolOptions.Collection, chunkReader)
+			} else {
+				err = restore.RestoreCollectionBSON(state.Intent)
+			}
+		} else {
+			log.Logf(log.Always, "nothing to do with file `%v`, skipping...", fileName)
 		}
 	}
 	// rstore indexes for last collection
@@ -398,7 +407,8 @@ type TarRestoreState struct {
 	RestoredMetadata  bool
 	RestoredBSON      bool
 	CollectionExists  bool
-	Indexes           []IndexDocument
+	MetadataIndexes   []IndexDocument
+	SystemIndexes     map[string][]IndexDocument
 	Intent            *intents.Intent
 	restore           *MongoRestore
 }
@@ -415,7 +425,8 @@ func (restore *MongoRestore) NewTarRestoreState() *TarRestoreState {
 		RestoredMetadata:  false,
 		RestoredBSON:      false,
 		CollectionExists:  false,
-		Indexes:           nil,
+		MetadataIndexes:   nil,
+		SystemIndexes:     nil,
 		Intent:            nil,
 		restore:           restore,
 	}
@@ -427,6 +438,7 @@ func (state *TarRestoreState) ChangeDatabase(db string) error {
 	}
 	state.CurrentDb = db
 	state.PastCollections = make([]string, 0, 10)
+	state.SystemIndexes = nil
 	return state.ChangeCollection("")
 }
 
@@ -437,7 +449,12 @@ func (state *TarRestoreState) ChangeCollection(collection string) error {
 	state.CurrentCollection = collection
 	state.UsesMetadataFiles = false
 	if state.RestoredMetadata {
-		err := state.restore.RestoreCollectionIndexes(state.Intent, state.Indexes)
+		err := state.restore.RestoreCollectionIndexes(state.Intent, state.MetadataIndexes)
+		if err != nil {
+			return err
+		}
+	} else if state.SystemIndexes != nil && state.SystemIndexes[state.Intent.C] != nil {
+		err := state.restore.RestoreCollectionIndexes(state.Intent, state.SystemIndexes[state.Intent.C])
 		if err != nil {
 			return err
 		}
@@ -445,6 +462,6 @@ func (state *TarRestoreState) ChangeCollection(collection string) error {
 	state.RestoredMetadata = false
 	state.RestoredBSON = false
 	state.CollectionExists = false
-	state.Indexes = nil
+	state.MetadataIndexes = nil
 	return nil
 }

@@ -88,9 +88,19 @@ func (dump *MongoDump) CreateIntentsForDatabase(dbName string) error {
 	}
 
 	log.Logf(log.DebugHigh, "found collections: %v", strings.Join(cols, ", "))
+	// tar needs system collections to be first
 	for _, colName := range cols {
-		if err = dump.CreateIntentForCollection(dbName, colName); err != nil {
-			return err // no context needed
+		if strings.HasPrefix(colName, "system.") {
+			if err = dump.CreateIntentForCollection(dbName, colName); err != nil {
+				return err // no context needed
+			}
+		}
+	}
+	for _, colName := range cols {
+		if !strings.HasPrefix(colName, "system.") {
+			if err = dump.CreateIntentForCollection(dbName, colName); err != nil {
+				return err // no context needed
+			}
 		}
 	}
 	return nil

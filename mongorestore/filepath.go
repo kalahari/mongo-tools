@@ -21,6 +21,8 @@ const (
 	MetadataFileType
 )
 
+const OplogFileName = "oplog.bson"
+
 // GetInfoFromFilename pulls the base collection name and FileType from a given file.
 func GetInfoFromFilename(filename string) (string, FileType) {
 	baseFileName := filepath.Base(filename)
@@ -71,7 +73,7 @@ func (restore *MongoRestore) CreateAllIntents(dumpDir string) error {
 				return err
 			}
 		} else {
-			if entry.Name() == "oplog.bson" {
+			if entry.Name() == OplogFileName {
 				if restore.InputOptions.OplogReplay {
 					log.Log(log.DebugLow, "found oplog.bson file to replay")
 				}
