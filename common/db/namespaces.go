@@ -33,7 +33,7 @@ func buildBsonArray(iter *mgo.Iter) ([]bson.D, error) {
 
 }
 
-// GetIndexes returns an iterator to thethe raw index info for a collection by
+// GetIndexes returns an iterator to the raw index info for a collection by
 // using the listIndexes command if available, or by falling back to querying
 // against system.indexes (pre-3.0 systems).
 func GetIndexes(coll *mgo.Collection) (*mgo.Iter, error) {
