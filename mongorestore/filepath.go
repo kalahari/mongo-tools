@@ -21,6 +21,8 @@ const (
 	MetadataFileType
 )
 
+const OplogFileName = "oplog.bson"
+
 // GetInfoFromFilename pulls the base collection name and FileType from a given file.
 func GetInfoFromFilename(filename string) (string, FileType) {
 	baseFileName := filepath.Base(filename)
@@ -42,6 +44,16 @@ func GetInfoFromFilename(filename string) (string, FileType) {
 	}
 }
 
+func GetInfoFromTarHeaderName(filename string) (string, string, FileType) {
+	// tar uses forward slashes for separator
+	directory, file := filepath.Split(filepath.FromSlash(filename))
+	collection, fileType := GetInfoFromFilename(file)
+	if directory != "" {
+		directory = strings.TrimSuffix(directory, string([]rune{filepath.Separator}))
+	}
+	return directory, collection, fileType
+}
+
 // CreateAllIntents drills down into a dump folder, creating intents for all of
 // the databases and collections it finds.
 func (restore *MongoRestore) CreateAllIntents(dumpDir string) error {
@@ -61,7 +73,7 @@ func (restore *MongoRestore) CreateAllIntents(dumpDir string) error {
 				return err
 			}
 		} else {
-			if entry.Name() == "oplog.bson" {
+			if entry.Name() == OplogFileName {
 				if restore.InputOptions.OplogReplay {
 					log.Log(log.DebugLow, "found oplog.bson file to replay")
 				}
@@ -99,18 +111,30 @@ func (restore *MongoRestore) CreateIntentsForDB(db, dir string) error {
 				filepath.Join(dir, entry.Name()))
 		} else {
 			collection, fileType := GetInfoFromFilename(entry.Name())
-			switch fileType {
-			case BSONFileType:
-				// Dumps of a single database (i.e. with the -d flag) may contain special
-				// db-specific collections that start with a "$" (for example, $admin.system.users
-				// holds the users for a database that was dumped with --dumpDbUsersAndRoles enabled).
-				// If these special files manage to be included in a dump directory during a full
-				// (multi-db) restore, we should ignore them.
-				if restore.ToolOptions.DB == "" && strings.HasPrefix(collection, "$") {
-					log.Logf(log.DebugLow,
-						"not restoring special collection %v.%v", db, collection)
-					continue
-				}
+			intent := restore.CreateIntentForFile(db, collection, fileType, filepath.Join(dir, entry.Name()),
+				entry.Size(), &usesMetadataFiles)
+			if intent != nil {
+				restore.manager.Put(intent)
+			}
+		}
+	}
+	return nil
+}
+
+func (restore *MongoRestore) CreateIntentForFile(db, collection string, fileType FileType, filePath string,
+	fileSize int64, usesMetadataFiles *bool) *intents.Intent {
+	switch fileType {
+	case BSONFileType:
+		// Dumps of a single database (i.e. with the -d flag) may contain special
+		// db-specific collections that start with a "$" (for example, $admin.system.users
+		// holds the users for a database that was dumped with --dumpDbUsersAndRoles enabled).
+		// If these special files manage to be included in a dump directory during a full
+		// (multi-db) restore, we should ignore them.
+		if restore.ToolOptions.DB == "" && strings.HasPrefix(collection, "$") {
+			log.Logf(log.DebugLow,
+				"not restoring special collection %v.%v", db, collection)
+			return nil
+		}
 				// TOOLS-717: disallow restoring to the system.profile collection.
 				// Server versions >= 3.0.3 disallow user inserts to system.profile so
 				// it would likely fail anyway.
@@ -118,36 +142,34 @@ func (restore *MongoRestore) CreateIntentsForDB(db, dir string) error {
 					log.Logf(log.DebugLow, "skipping restore of system.profile collection", db)
 					continue
 				}
-				// skip restoring the indexes collection if we are using metadata
-				// files to store index information, to eliminate redundancy
-				if collection == "system.indexes" && usesMetadataFiles {
-					log.Logf(log.DebugLow,
-						"not restoring system.indexes collection because database %v "+
-							"has .metadata.json files", db)
-					continue
-				}
-				intent := &intents.Intent{
-					DB:       db,
-					C:        collection,
-					Size:     entry.Size(),
-					BSONPath: filepath.Join(dir, entry.Name()),
-				}
-				log.Logf(log.Info, "found collection %v bson to restore", intent.Namespace())
-				restore.manager.Put(intent)
-			case MetadataFileType:
-				usesMetadataFiles = true
-				intent := &intents.Intent{
-					DB:           db,
-					C:            collection,
-					MetadataPath: filepath.Join(dir, entry.Name()),
-				}
-				log.Logf(log.Info, "found collection %v metadata to restore", intent.Namespace())
-				restore.manager.Put(intent)
-			default:
-				log.Logf(log.Always, `don't know what to do with file "%v", skipping...`,
-					filepath.Join(dir, entry.Name()))
-			}
+		// skip restoring the indexes collection if we are using metadata
+		// files to store index information, to eliminate redundancy
+		if collection == "system.indexes" && *usesMetadataFiles {
+			log.Logf(log.DebugLow,
+				"not restoring system.indexes collection because database %v "+
+					"has .metadata.json files", db)
+			return nil
 		}
+		intent := &intents.Intent{
+			DB:       db,
+			C:        collection,
+			Size:     fileSize,
+			BSONPath: filePath,
+		}
+		log.Logf(log.Info, "found collection %v bson to restore", intent.Namespace())
+		return intent
+	case MetadataFileType:
+		*usesMetadataFiles = true
+		intent := &intents.Intent{
+			DB:           db,
+			C:            collection,
+			MetadataPath: filePath,
+		}
+		log.Logf(log.Info, "found collection %v metadata to restore", intent.Namespace())
+		return intent
+	default:
+		log.Logf(log.Always, `don't know what to do with file "%v", skipping...`,
+			filePath)
 	}
 	return nil
 }

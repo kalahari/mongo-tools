@@ -4,6 +4,7 @@ package intents
 import (
 	"github.com/mongodb/mongo-tools/common/log"
 	"gopkg.in/mgo.v2/bson"
+	"io"
 	"sync"
 )
 
@@ -24,6 +25,9 @@ type Intent struct {
 	// File/collection size, for some prioritizer implementations.
 	// Units don't matter as long as they are consistent for a given use case.
 	Size int64
+
+	// reader to get file data, used by tar
+	Reader io.Reader
 }
 
 func (it *Intent) Namespace() string {

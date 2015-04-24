@@ -4,6 +4,7 @@ package mongorestore
 import (
 	"fmt"
 	"github.com/mongodb/mongo-tools/common/auth"
+	"github.com/mongodb/mongo-tools/common/chunktar"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/intents"
 	"github.com/mongodb/mongo-tools/common/log"
@@ -12,6 +13,9 @@ import (
 	"github.com/mongodb/mongo-tools/common/util"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"io"
+	"os"
+	"strings"
 	"sync"
 )
 
@@ -131,7 +135,7 @@ func (restore *MongoRestore) ParseAndValidateOptions() error {
 	// a single dash signals reading from stdin
 	if restore.TargetDirectory == "-" {
 		restore.useStdin = true
-		if restore.ToolOptions.Collection == "" {
+		if !restore.InputOptions.Tar && restore.ToolOptions.Collection == "" {
 			return fmt.Errorf("cannot restore from stdin without a specified collection")
 		}
 	}
@@ -149,6 +153,23 @@ func (restore *MongoRestore) Restore() error {
 
 	// Build up all intents to be restored
 	restore.manager = intents.NewCategorizingIntentManager()
+
+	if restore.InputOptions.Tar {
+		err = restore.RestoreTarDump()
+	} else {
+		err = restore.RestoreFileDump()
+	}
+	if err != nil {
+		return err
+	}
+
+	log.Log(log.Always, "done")
+	return nil
+}
+
+// restore from file(s) dump
+func (restore *MongoRestore) RestoreFileDump() error {
+	var err error
 
 	// handle cases where the user passes in a file instead of a directory
 	if isBSON(restore.TargetDirectory) {
@@ -255,7 +276,123 @@ func (restore *MongoRestore) Restore() error {
 			return fmt.Errorf("restore error: %v", err)
 		}
 	}
-
-	log.Log(log.Always, "done")
 	return nil
+}
+
+// serially build and restore intents from a tar archive, there is no random
+// access, so it is not possilbe to use an intents.Manager
+func (restore *MongoRestore) RestoreTarDump() error {
+	log.Log(log.Always, "restoring from a tar archive, unable to detect file errors before restore begins")
+
+	var chunkReader *chunktar.Reader
+	if restore.useStdin {
+		chunkReader = chunktar.NewReader(os.Stdin)
+	} else {
+		file, err := os.Open(restore.InputOptions.Directory)
+		if err != nil {
+			return fmt.Errorf("unable to open tar archive file `%v` for reading: %v",
+				restore.InputOptions.Directory, err)
+		}
+		chunkReader = chunktar.NewReader(file)
+		defer file.Close()
+	}
+
+	// start up the progress bar manager
+	restore.progressManager = progress.NewProgressBarManager(log.Writer(0), progressBarWaitTime)
+	restore.progressManager.Start()
+	defer restore.progressManager.Stop()
+
+	state := restore.NewTarRestoreState()
+
+	for fileName, err := chunkReader.Next(); err != io.EOF; fileName, err = chunkReader.Next() {
+		if err != nil {
+			return err
+		}
+		db, collection, fileType := GetInfoFromTarHeaderName(fileName)
+		log.Logf(log.DebugHigh, "next file in tar archive `%v` with database `%v`, collection `%v`, and type `%v`",
+			fileName, db, collection, fileType)
+
+		if fileType == UnknownFileType {
+			log.Logf(log.Always, "file `%v` is of unknown type, skipping...", fileName)
+			continue
+		}
+
+		if err = util.ValidateDBName(db); err != nil {
+			log.Logf(log.Always, "invalid database name '%v': %v, skipping...", db, err)
+			err = nil
+			continue
+		}
+
+		if err = util.ValidateCollectionGrammar(collection); err != nil {
+			log.Logf(log.Always, "invalid collection name '%v': %v, skipping...", db, err)
+			err = nil
+			continue
+		}
+
+		isSystemCollection := strings.HasPrefix(collection, "system.")
+
+		if db != state.CurrentDb {
+			if state.SingleDb {
+				log.Logf(log.Always, "file `%v` is not for restore database `%v`, skipping...",
+					fileName, state.CurrentDb)
+				continue
+			} else {
+				if util.StringSliceContains(state.PastDbs, db) {
+					log.Logf(log.Always, "file `%v` is for database `%v` which has already been processed, skipping...",
+						fileName, db)
+				}
+				state.ChangeDatabase(db)
+			}
+		}
+
+		if collection != state.CurrentCollection {
+			if state.SingleCollection && !isSystemCollection {
+				log.Logf(log.Always, "file `%v` is not for restore database `%v` and collection `%v`, skipping...",
+					fileName, state.CurrentDb, state.CurrentCollection)
+				continue
+			} else {
+				if util.StringSliceContains(state.PastCollections, collection) {
+					log.Logf(log.Always, "file `%v` is for database `%v` and collection `%v` which has already been processed, skipping...", fileName, db, collection)
+				}
+				state.ChangeCollection(collection)
+			}
+		}
+
+		if state.RestoredBSON && fileType == MetadataFileType {
+			log.Logf(log.Always, "collection `%v` has already been restored, it is too late to restore metadata from `%v`, skipping...",
+				state.CurrentCollection, fileName)
+			continue
+		}
+
+		state.Intent = restore.CreateIntentForFile(db, collection, fileType, "-", -1, &state.UsesMetadataFiles)
+		if state.Intent == nil {
+			continue
+		}
+		state.Intent.Reader = chunkReader
+
+		if !state.RestoredMetadata && !state.RestoredBSON && !isSystemCollection {
+			state.CollectionExists, err = restore.RestoreBeginCollection(state.Intent)
+			if err != nil {
+				return err
+			}
+		}
+
+		if fileType == MetadataFileType && !isSystemCollection {
+			state.MetadataIndexes, err = restore.RestoreCollectionMetadata(state.Intent, state.CollectionExists)
+			if err != nil {
+				return err
+			}
+			state.RestoredMetadata = true
+		} else if fileType == BSONFileType {
+			if collection == "system.indexes" && !restore.OutputOptions.NoIndexRestore {
+				state.SystemIndexes, err = restore.IndexesFromBSONReader(restore.ToolOptions.Collection, chunkReader)
+			} else {
+				err = restore.RestoreCollectionBSON(state.Intent)
+			}
+		} else {
+			log.Logf(log.Always, "nothing to do with file `%v`, skipping...", fileName)
+		}
+	}
+	// rstore indexes for last collection
+	return state.ChangeCollection("")
 }

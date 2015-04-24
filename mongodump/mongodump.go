@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/mongodb/mongo-tools/common/auth"
 	"github.com/mongodb/mongo-tools/common/bsonutil"
+	"github.com/mongodb/mongo-tools/common/chunktar"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/intents"
 	"github.com/mongodb/mongo-tools/common/json"
@@ -46,13 +47,14 @@ type MongoDump struct {
 	isMongos        bool
 	authVersion     int
 	progressManager *progress.Manager
+	chunkWriter     *chunktar.Writer
 }
 
 // ValidateOptions checks for any incompatible sets of options.
 func (dump *MongoDump) ValidateOptions() error {
 	switch {
-	case dump.OutputOptions.Out == "-" && dump.ToolOptions.Namespace.Collection == "":
-		return fmt.Errorf("can only dump a single collection to stdout")
+	case dump.OutputOptions.Out == "-" && !dump.OutputOptions.Tar && dump.ToolOptions.Namespace.Collection == "":
+		return fmt.Errorf("can only dump a single collection or tar archive to stdout")
 	case dump.ToolOptions.Namespace.DB == "" && dump.ToolOptions.Namespace.Collection != "":
 		return fmt.Errorf("cannot dump a collection without a specified database")
 	case dump.InputOptions.Query != "" && dump.ToolOptions.Namespace.Collection == "":
@@ -185,6 +187,24 @@ func (dump *MongoDump) Dump() error {
 		}
 	}
 
+	// If tar is enabled, create a new tar.Writer on a new file
+	// or stdout
+	if dump.OutputOptions.Tar {
+		if dump.useStdout {
+			dump.chunkWriter = chunktar.NewWriter(os.Stdout)
+			defer dump.chunkWriter.Close()
+		} else {
+			out, err := os.Create(dump.OutputOptions.Out)
+			if err != nil {
+				return fmt.Errorf("error creating tar file `%v`: %v", dump.OutputOptions.Out, err)
+			}
+			defer out.Close()
+
+			dump.chunkWriter = chunktar.NewWriter(out)
+			defer dump.chunkWriter.Close()
+		}
+	}
+
 	// kick off the progress bar manager and begin dumping intents
 	dump.progressManager.Start()
 	defer dump.progressManager.Stop()
@@ -211,11 +231,12 @@ func (dump *MongoDump) Dump() error {
 		log.Logf(log.DebugHigh, "oplog entry %v still exists", dump.oplogStart)
 
 		// dump oplog in root of the dump folder
-		oplogFilepath := filepath.Join(dump.OutputOptions.Out, "oplog.bson")
-		oplogOut, err := os.Create(oplogFilepath)
+		err, oplogOut, oplogFilepath, dispose := dump.getOutputWriter("", "oplog.bson", false)
 		if err != nil {
-			return fmt.Errorf("error creating bson file `%v`: %v", oplogFilepath, err)
+			return err
 		}
+		defer dispose()
+
 		log.Logf(log.Always, "writing captured oplog to %v", oplogFilepath)
 		err = dump.DumpOplogAfterTimestamp(dump.oplogStart, oplogOut)
 		if err != nil {
@@ -264,6 +285,10 @@ func (dump *MongoDump) DumpIntents() error {
 		jobs = dump.ToolOptions.HiddenOptions.MaxProcs
 	}
 	jobs = util.MaxInt(jobs, 1)
+	// can't write multiple files to tar archive simulatneously
+	if dump.OutputOptions.Tar {
+		jobs = 1
+	}
 	if jobs > 1 {
 		dump.manager.Finalize(intents.LongestTaskFirst)
 	} else {
@@ -328,21 +353,33 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 
 	}
 
-	if dump.useStdout {
+	if dump.useStdout && !dump.OutputOptions.Tar {
 		log.Logf(log.Always, "writing %v to stdout", intent.Namespace())
 		return dump.dumpQueryToWriter(findQuery, intent, os.Stdout)
 	}
 
-	dbFolder := filepath.Join(dump.OutputOptions.Out, intent.DB)
-	if err = os.MkdirAll(dbFolder, defaultPermissions); err != nil {
-		return fmt.Errorf("error creating folder `%v` for dump: %v", dbFolder, err)
+	// dump metadat first, tar restore needs the metadata before the collection
+	createDir := true
+	// don't dump metatdata for SystemIndexes collection
+	if !intent.IsSystemIndexes() {
+		err, metaOut, metadataFilepath, dispose := dump.getOutputWriter(intent.DB, fmt.Sprintf("%v.metadata.json", intent.C), createDir)
+		if err != nil {
+			return err
+		}
+		defer dispose()
+		createDir = false
+
+		log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), metadataFilepath)
+		if err = dump.dumpMetadataToWriter(intent, metaOut); err != nil {
+			return err
+		}
 	}
-	outFilepath := filepath.Join(dbFolder, fmt.Sprintf("%v.bson", intent.C))
-	out, err := os.Create(outFilepath)
+
+	err, out, outFilepath, dispose := dump.getOutputWriter(intent.DB, fmt.Sprintf("%v.bson", intent.C), createDir)
 	if err != nil {
-		return fmt.Errorf("error creating bson file `%v`: %v", outFilepath, err)
+		return err
 	}
-	defer out.Close()
+	defer dispose()
 
 	if !dump.OutputOptions.Repair {
 		log.Logf(log.Always, "writing %v to %v", intent.Namespace(), outFilepath)
@@ -359,23 +396,6 @@ func (dump *MongoDump) DumpIntent(intent *intents.Intent) error {
 		}
 		log.Logf(log.Always,
 			"\trepair cursor found %v documents in %v", repairCounter, intent.Namespace())
-	}
-
-	// don't dump metatdata for SystemIndexes collection
-	if intent.IsSystemIndexes() {
-		return nil
-	}
-
-	metadataFilepath := filepath.Join(dbFolder, fmt.Sprintf("%v.metadata.json", intent.C))
-	metaOut, err := os.Create(metadataFilepath)
-	if err != nil {
-		return fmt.Errorf("error creating metadata.json file `%v`: %v", outFilepath, err)
-	}
-	defer metaOut.Close()
-
-	log.Logf(log.Always, "writing %v metadata to %v", intent.Namespace(), metadataFilepath)
-	if err = dump.dumpMetadataToWriter(intent, metaOut); err != nil {
-		return err
 	}
 
 	log.Logf(log.Always, "done dumping %v", intent.Namespace())
@@ -507,4 +527,38 @@ func (dump *MongoDump) DumpUsersAndRolesForDB(db string) error {
 	}
 
 	return nil
+}
+
+// return an io.Writer for a file or tar archive depending on output flags
+func (dump *MongoDump) getOutputWriter(directory, file string, createDir bool) (err error, writer io.Writer, writerPath string, dispose func()) {
+	if dump.OutputOptions.Tar {
+		if directory == "" {
+			writerPath = file
+		} else {
+			// tar always uses forward slash for path separator
+			writerPath = filepath.ToSlash(filepath.Join(directory, file))
+		}
+		err = dump.chunkWriter.WriteHeader(writerPath)
+		writer = dump.chunkWriter
+		// no disposal necessary for tar
+		dispose = func() {}
+	} else {
+		if createDir {
+			outFolder := filepath.Join(dump.OutputOptions.Out, directory)
+			if err = os.MkdirAll(outFolder, defaultPermissions); err != nil {
+				err = fmt.Errorf("error creating folder `%v` for dump: %v", outFolder, err)
+				return
+			}
+		}
+		writerPath = filepath.Join(filepath.Join(dump.OutputOptions.Out, directory, file))
+		var outFile *os.File
+		outFile, err = os.Create(writerPath)
+		writer = outFile
+		dispose = func() { outFile.Close() }
+	}
+	if err != nil {
+		err = fmt.Errorf("error creating file `%v`: %v", writerPath, err)
+		return
+	}
+	return
 }
