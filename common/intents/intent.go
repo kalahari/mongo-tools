@@ -262,6 +262,9 @@ func (manager *Manager) Finalize(pType PriorityType) {
 	case MultiDatabaseLTF:
 		log.Log(log.DebugHigh, "finalizing intent manager with multi-database longest task first prioritizer")
 		manager.prioritizer = NewMultiDatabaseLTFPrioritizer(manager.intentsByDiscoveryOrder)
+	case SystemIndexesFirst:
+		log.Log(log.DebugHigh, "finalizing intent manager with system indexes first prioritizer")
+		manager.prioritizer = NewSystemIndexesFirstPrioritizer(manager.intentsByDiscoveryOrder)
 	default:
 		panic("cannot initialize IntentPrioritizer with unknown type")
 	}

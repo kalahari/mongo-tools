@@ -135,13 +135,13 @@ func (restore *MongoRestore) CreateIntentForFile(db, collection string, fileType
 				"not restoring special collection %v.%v", db, collection)
 			return nil
 		}
-				// TOOLS-717: disallow restoring to the system.profile collection.
-				// Server versions >= 3.0.3 disallow user inserts to system.profile so
-				// it would likely fail anyway.
-				if collection == "system.profile" {
-					log.Logf(log.DebugLow, "skipping restore of system.profile collection", db)
-					continue
-				}
+		// TOOLS-717: disallow restoring to the system.profile collection.
+		// Server versions >= 3.0.3 disallow user inserts to system.profile so
+		// it would likely fail anyway.
+		if collection == "system.profile" {
+			log.Logf(log.DebugLow, "skipping restore of system.profile collection", db)
+			return nil
+		}
 		// skip restoring the indexes collection if we are using metadata
 		// files to store index information, to eliminate redundancy
 		if collection == "system.indexes" && *usesMetadataFiles {

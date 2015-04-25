@@ -15,7 +15,6 @@ import (
 	"gopkg.in/mgo.v2/bson"
 	"io"
 	"os"
-	"strings"
 	"sync"
 )
 
@@ -329,7 +328,7 @@ func (restore *MongoRestore) RestoreTarDump() error {
 			continue
 		}
 
-		isSystemCollection := strings.HasPrefix(collection, "system.")
+		isSystemIndexes := collection == "system.indexes"
 
 		if db != state.CurrentDb {
 			if state.SingleDb {
@@ -346,7 +345,7 @@ func (restore *MongoRestore) RestoreTarDump() error {
 		}
 
 		if collection != state.CurrentCollection {
-			if state.SingleCollection && !isSystemCollection {
+			if state.SingleCollection && !isSystemIndexes {
 				log.Logf(log.Always, "file `%v` is not for restore database `%v` and collection `%v`, skipping...",
 					fileName, state.CurrentDb, state.CurrentCollection)
 				continue
@@ -370,14 +369,14 @@ func (restore *MongoRestore) RestoreTarDump() error {
 		}
 		state.Intent.Reader = chunkReader
 
-		if !state.RestoredMetadata && !state.RestoredBSON && !isSystemCollection {
+		if !state.RestoredMetadata && !state.RestoredBSON && !isSystemIndexes {
 			state.CollectionExists, err = restore.RestoreBeginCollection(state.Intent)
 			if err != nil {
 				return err
 			}
 		}
 
-		if fileType == MetadataFileType && !isSystemCollection {
+		if fileType == MetadataFileType && !isSystemIndexes {
 			state.MetadataIndexes, err = restore.RestoreCollectionMetadata(state.Intent, state.CollectionExists)
 			if err != nil {
 				return err

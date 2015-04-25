@@ -11,6 +11,7 @@ const (
 	Legacy PriorityType = iota
 	LongestTaskFirst
 	MultiDatabaseLTF
+	SystemIndexesFirst
 )
 
 // IntentPrioritizer encapsulates the logic of scheduling intents
@@ -50,6 +51,29 @@ func (legacy *legacyPrioritizer) Get() *Intent {
 func (legacy *legacyPrioritizer) Finish(*Intent) {
 	// no-op
 	return
+}
+
+//===== Tar System First =====
+
+// SystemIndexesFirst is a special case of Legacy, where the system.indexes
+// collection is moved to the beginning of the databse for use by tar archives
+func NewSystemIndexesFirstPrioritizer(intentList []*Intent) *legacyPrioritizer {
+	intentCount := len(intentList)
+	tarIntentList := make([]*Intent, intentCount)
+	copy(tarIntentList, intentList)
+	// bubble the system collections to the top of their databases
+	for swaps := 1; swaps > 0; {
+		swaps = 0
+		for i := 1; i < intentCount; i++ {
+			previous := tarIntentList[i-1]
+			current := tarIntentList[i]
+			if previous.DB == current.DB && current.C == "system.indexes" && previous.C != "system.indexes" {
+				tarIntentList[i-1], tarIntentList[i] = current, previous
+				swaps++
+			}
+		}
+	}
+	return &legacyPrioritizer{queue: tarIntentList}
 }
 
 //===== Longest Task First =====

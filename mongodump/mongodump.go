@@ -285,11 +285,12 @@ func (dump *MongoDump) DumpIntents() error {
 		jobs = dump.ToolOptions.HiddenOptions.MaxProcs
 	}
 	jobs = util.MaxInt(jobs, 1)
-	// can't write multiple files to tar archive simulatneously
 	if dump.OutputOptions.Tar {
+		// can't write multiple files to tar archive simulatneously
 		jobs = 1
-	}
-	if jobs > 1 {
+		// tar needs the system.indexes first
+		dump.manager.Finalize(intents.SystemIndexesFirst)
+	} else if jobs > 1 {
 		dump.manager.Finalize(intents.LongestTaskFirst)
 	} else {
 		dump.manager.Finalize(intents.Legacy)
